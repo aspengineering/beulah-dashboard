@@ -53,13 +53,26 @@ alter table leads enable row level security;
 alter table activity_log enable row level security;
 alter table todos enable row level security;
 
+-- Team mode: every authenticated user sees and edits all rows.
+-- Switch back to per-user isolation by replacing these with the commented policies below.
 drop policy if exists "own leads" on leads;
 drop policy if exists "own activity" on activity_log;
 drop policy if exists "own todos" on todos;
+drop policy if exists "team leads" on leads;
+drop policy if exists "team activity" on activity_log;
+drop policy if exists "team todos" on todos;
 
-create policy "own leads" on leads
-  for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
-create policy "own activity" on activity_log
-  for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
-create policy "own todos" on todos
-  for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
+create policy "team leads" on leads
+  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "team activity" on activity_log
+  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "team todos" on todos
+  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+
+-- Per-user isolation (alternative — uncomment to revert):
+-- create policy "own leads" on leads
+--   for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
+-- create policy "own activity" on activity_log
+--   for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
+-- create policy "own todos" on todos
+--   for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
