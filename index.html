@@ -68,6 +68,19 @@ function nowLocal() {
   d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
   return d.toISOString().slice(0, 16);
 }
+function fmtDue(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  const ms = d.getTime() - Date.now();
+  const days = Math.round(ms / 86400000);
+  let text;
+  if (days < 0) text = `${Math.abs(days)}d overdue`;
+  else if (days === 0) text = 'due today';
+  else if (days === 1) text = 'due tomorrow';
+  else if (days < 14) text = `due in ${days}d`;
+  else text = 'due ' + d.toLocaleDateString(undefined, { month:'short', day:'numeric' });
+  return { text, overdue: ms < 0, soon: ms >= 0 && days <= 1 };
+}
 function fmtRelative(iso) {
   const diff = (Date.now() - new Date(iso).getTime()) / 1000;
   if (diff < 60) return 'just now';
@@ -319,10 +332,12 @@ function renderMain() {
         <div class="flex items-center justify-between mb-3 gap-3">
           <h3 class="text-base font-bold text-slate-900">To do <span class="text-amber-700">· ${state.todos.filter(t=>!t.done).length} open</span></h3>
         </div>
-        <form id="todo-form" class="flex gap-2 mb-3">
+        <form id="todo-form" class="flex gap-2 mb-3 flex-wrap sm:flex-nowrap">
           <input id="todo-input" type="text" placeholder="What still needs to happen for this lead to sign?"
-            class="flex-1 px-3 py-2 text-sm border border-amber-300 rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-amber-500" />
-          <button type="submit" class="px-4 py-2 bg-slate-900 text-white text-sm font-medium rounded-md hover:bg-slate-800">Add</button>
+            class="flex-1 min-w-0 px-3 py-2 text-sm border border-amber-300 rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-amber-500" />
+          <input id="todo-due" type="date" title="Due date (optional)"
+            class="px-2 py-2 text-sm border border-amber-300 rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-amber-500" />
+          <button type="submit" class="px-4 py-2 bg-slate-900 text-white text-sm font-medium rounded-md hover:bg-slate-800 shrink-0">Add</button>
         </form>
         <div id="todo-list">${todosHTML()}</div>
       </section>
@@ -439,19 +454,37 @@ function activityItemHTML(a, isFuture) {
     </div>`;
 }
 
+function dueBadgeHTML(t, big = false) {
+  const due = fmtDue(t.due_at);
+  if (!due) return '';
+  if (due.overdue) {
+    return `<span class="${big ? 'text-base font-extrabold' : 'text-xs font-bold'} text-red-600 ml-2 whitespace-nowrap">${due.text.toUpperCase()}</span>`;
+  }
+  if (due.soon) {
+    return `<span class="text-xs font-semibold text-amber-700 ml-2 whitespace-nowrap">${due.text}</span>`;
+  }
+  return `<span class="text-xs text-slate-500 ml-2 whitespace-nowrap">${due.text}</span>`;
+}
+
 function todosHTML() {
   if (state.todos.length === 0) {
     return `<div class="text-sm text-slate-500 py-2">Nothing to do yet. Add the next concrete step above.</div>`;
   }
   const open = state.todos.filter(t => !t.done);
   const done = state.todos.filter(t => t.done);
-  const row = (t) => `
-    <label class="flex items-start gap-2 py-2 group cursor-pointer">
+  const row = (t) => {
+    const due = fmtDue(t.due_at);
+    const overdue = !t.done && due?.overdue;
+    return `
+    <label class="flex items-start gap-2 py-2 group cursor-pointer ${overdue ? 'bg-red-50 -mx-2 px-2 rounded-md border-l-4 border-red-500' : ''}">
       <input type="checkbox" data-action="toggle-todo" data-id="${t.id}" ${t.done ? 'checked' : ''}
         class="mt-0.5 w-4 h-4 rounded border-amber-400 text-emerald-600 focus:ring-emerald-500" />
-      <span class="flex-1 text-sm font-medium ${t.done ? 'line-through text-slate-400' : 'text-slate-900'} break-words">${esc(t.body)}</span>
+      <span class="flex-1 text-sm font-medium ${t.done ? 'line-through text-slate-400' : 'text-slate-900'} break-words">
+        ${esc(t.body)}${dueBadgeHTML(t, overdue)}
+      </span>
       <button data-action="delete-todo" data-id="${t.id}" class="text-slate-400 hover:text-red-600 text-xs opacity-0 group-hover:opacity-100">×</button>
     </label>`;
+  };
   let html = open.map(row).join('');
   if (done.length) html += `<div class="text-[10px] uppercase tracking-wide text-slate-400 mt-3 mb-1">Done · ${done.length}</div>` + done.map(row).join('');
   return html;
@@ -460,26 +493,35 @@ function todosHTML() {
 function masterTodosHTML() {
   const open = (state.masterTodos || []).filter(t => !t.done);
   const done = (state.masterTodos || []).filter(t => t.done);
-  const row = (t) => `
-    <label class="flex items-start gap-2 py-1.5 group cursor-pointer">
+  const overdueCount = open.filter(t => fmtDue(t.due_at)?.overdue).length;
+  const row = (t) => {
+    const due = fmtDue(t.due_at);
+    const overdue = !t.done && due?.overdue;
+    return `
+    <label class="flex items-start gap-2 py-1.5 group cursor-pointer ${overdue ? 'bg-red-950/40 -mx-2 px-2 rounded-md border-l-4 border-red-500' : ''}">
       <input type="checkbox" data-action="toggle-master-todo" data-id="${t.id}" ${t.done ? 'checked' : ''}
         class="mt-0.5 w-4 h-4 rounded border-slate-400 text-emerald-600 focus:ring-emerald-500" />
-      <span class="flex-1 text-sm font-semibold ${t.done ? 'line-through text-slate-400' : 'text-slate-900'} break-words">${esc(t.body)}</span>
-      <button data-action="delete-master-todo" data-id="${t.id}" class="text-slate-400 hover:text-red-600 text-xs opacity-0 group-hover:opacity-100">×</button>
+      <span class="flex-1 text-sm font-semibold ${t.done ? 'line-through text-slate-400' : (overdue ? 'text-red-400' : 'text-slate-100')} break-words">
+        ${esc(t.body)}${dueBadgeHTML(t, overdue)}
+      </span>
+      <button data-action="delete-master-todo" data-id="${t.id}" class="text-slate-400 hover:text-red-500 text-xs opacity-0 group-hover:opacity-100">×</button>
     </label>`;
+  };
   return `
-    <section class="bg-slate-900 text-white rounded-xl p-5 mb-5 shadow-md">
+    <section class="${overdueCount > 0 ? 'bg-red-950 ring-2 ring-red-500' : 'bg-slate-900'} text-white rounded-xl p-5 mb-5 shadow-md transition">
       <div class="flex items-center justify-between mb-3 gap-3 flex-wrap">
         <div>
           <h3 class="text-base font-bold">Master tasks <span class="text-slate-300 font-normal">· standing orders for the team</span></h3>
           <p class="text-xs text-slate-400 mt-0.5">Always-on rules. Things every team member should be doing across all leads.</p>
         </div>
-        <span class="text-xs text-slate-300">${open.length} open${done.length ? ` · ${done.length} done` : ''}</span>
+        <span class="text-xs ${overdueCount > 0 ? 'text-red-300 font-bold' : 'text-slate-300'}">${overdueCount > 0 ? overdueCount + ' OVERDUE · ' : ''}${open.length} open${done.length ? ` · ${done.length} done` : ''}</span>
       </div>
-      <form id="master-todo-form" class="flex gap-2 mb-3">
-        <input id="master-todo-input" type="text" placeholder="e.g. Call each lead and report progress every Monday"
-          class="flex-1 px-3 py-2 text-sm bg-slate-800 border border-slate-700 rounded-md text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-        <button type="submit" class="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-md hover:bg-emerald-500">Add</button>
+      <form id="master-todo-form" class="flex gap-2 mb-3 flex-wrap sm:flex-nowrap">
+        <input id="master-todo-input" type="text" placeholder="e.g. Call each lead — follow-up call (not email)"
+          class="flex-1 min-w-0 px-3 py-2 text-sm bg-slate-800 border border-slate-700 rounded-md text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+        <input id="master-todo-due" type="date" title="Due date (optional)"
+          class="px-2 py-2 text-sm bg-slate-800 border border-slate-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+        <button type="submit" class="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-md hover:bg-emerald-500 shrink-0">Add</button>
       </form>
       <div class="bg-slate-800 rounded-md px-3 py-1 -mx-1">
         ${state.masterTodos.length === 0
@@ -532,23 +574,26 @@ async function renderOverview() {
     upcomingCount: upcomingByLead[l.id] || 0
   }));
 
-  // Hottest: most activity last 14 days; tiebreak by most recent touch
+  // Excluded from "Hottest" and "Needs attention" — early test rows
+  const EXCLUDE = new Set(['sípos lóránt', 'vidák lászló']);
+  const isExcluded = (l) => EXCLUDE.has((l.name || '').toLowerCase());
+
+  // Hottest: only leads with at least one log in the last 14 days
   const hottest = decorated
-    .filter(l => l.stage !== 'Signed')
+    .filter(l => l.stage !== 'Signed' && !isExcluded(l) && l.count14d > 0)
     .sort((a, b) => (b.count14d - a.count14d) || (new Date(b.lastTouched) - new Date(a.lastTouched)))
     .slice(0, 8);
 
-  // Going stale: active and last touched more than STALE_DAYS ago
-  const stale = decorated
-    .filter(l => l.stage !== 'Signed' && (now - new Date(l.lastTouched).getTime()) > staleMs)
+  // Needs attention: stale OR no scheduled future event (merged section)
+  const needsAttention = decorated
+    .filter(l => {
+      if (l.stage === 'Signed' || isExcluded(l)) return false;
+      const isStale = (now - new Date(l.lastTouched).getTime()) > staleMs;
+      const noNextStep = l.upcomingCount === 0;
+      return isStale || noNextStep;
+    })
     .sort((a, b) => new Date(a.lastTouched) - new Date(b.lastTouched))
-    .slice(0, 8);
-
-  // Needs follow-up: active leads with no scheduled future event
-  const needsFollowup = decorated
-    .filter(l => l.stage !== 'Signed' && l.upcomingCount === 0)
-    .sort((a, b) => new Date(a.lastTouched) - new Date(b.lastTouched))
-    .slice(0, 8);
+    .slice(0, 16);
 
   // Recent wins: leads signed in the last 30 days
   const monthAgo = now - 30 * 86400000;
@@ -651,10 +696,9 @@ async function renderOverview() {
         </section>
       </div>
 
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 mb-5">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-5">
         ${leadListSectionHTML('Hottest leads', 'Most logs in the last 14 days. Where momentum is.', hottest, 'count14d', 'logs / 14d', 'No activity in the last 14 days yet.')}
-        ${leadListSectionHTML('Needs follow-up', 'Active leads with no scheduled next step.', needsFollowup, null, null, 'Every active lead has a future event scheduled.')}
-        ${leadListSectionHTML('Going stale', 'Active leads not touched in ' + STALE_DAYS + '+ days.', stale, null, null, 'No leads are stale. All caught up.')}
+        ${leadListSectionHTML('Needs attention', 'Stale (' + STALE_DAYS + '+ days untouched) or no scheduled next step.', needsAttention, null, null, 'Every active lead is fresh and has a next step scheduled.')}
       </div>
 
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-5">
@@ -808,14 +852,17 @@ async function onClick(e) {
 async function addMasterTodo(e) {
   e.preventDefault();
   const input = $('#master-todo-input');
+  const dueInput = $('#master-todo-due');
   const body = input.value.trim();
   if (!body) return;
+  const due_at = dueInput?.value ? new Date(dueInput.value + 'T17:00').toISOString() : null;
   const { data, error } = await sb.from('todos')
-    .insert({ lead_id: null, owner_id: state.user.id, body })
+    .insert({ lead_id: null, owner_id: state.user.id, body, due_at })
     .select().single();
   if (error) return toast(error.message, true);
   state.masterTodos.push(data);
   input.value = '';
+  if (dueInput) dueInput.value = '';
   renderOverview();
 }
 
@@ -1025,14 +1072,17 @@ async function onLogSubmit(e) {
 async function onTodoSubmit(e) {
   e.preventDefault();
   const input = $('#todo-input');
+  const dueInput = $('#todo-due');
   const body = input.value.trim();
   if (!body || !state.selectedId) return;
+  const due_at = dueInput?.value ? new Date(dueInput.value + 'T17:00').toISOString() : null;
   const { data, error } = await sb.from('todos')
-    .insert({ lead_id: state.selectedId, owner_id: state.user.id, body })
+    .insert({ lead_id: state.selectedId, owner_id: state.user.id, body, due_at })
     .select().single();
   if (error) return toast(error.message, true);
   state.todos.push(data);
   input.value = '';
+  if (dueInput) dueInput.value = '';
   $('#todo-list').innerHTML = todosHTML();
 }
 

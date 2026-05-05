@@ -44,11 +44,13 @@ create table if not exists todos (
   owner_id uuid references auth.users(id) on delete cascade not null,
   body text not null,
   done boolean default false,
+  due_at timestamptz,
   created_at timestamptz default now()
 );
 
 -- Idempotent for upgrades from earlier versions:
 alter table todos alter column lead_id drop not null;
+alter table todos add column if not exists due_at timestamptz;
 
 create index if not exists todos_lead_idx on todos(lead_id, done, created_at);
 
