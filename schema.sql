@@ -36,15 +36,19 @@ alter table activity_log add column if not exists event_at timestamptz default n
 
 create index if not exists activity_lead_event_idx on activity_log(lead_id, event_at desc);
 
--- Todos: outstanding tasks per lead
+-- Todos: outstanding tasks per lead. lead_id is NULL for "master todos"
+-- (team-wide standing tasks like "Call each lead and report progress").
 create table if not exists todos (
   id uuid primary key default gen_random_uuid(),
-  lead_id uuid references leads(id) on delete cascade not null,
+  lead_id uuid references leads(id) on delete cascade,
   owner_id uuid references auth.users(id) on delete cascade not null,
   body text not null,
   done boolean default false,
   created_at timestamptz default now()
 );
+
+-- Idempotent for upgrades from earlier versions:
+alter table todos alter column lead_id drop not null;
 
 create index if not exists todos_lead_idx on todos(lead_id, done, created_at);
 

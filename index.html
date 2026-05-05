@@ -46,7 +46,9 @@ const state = {
   sort: 'updated',
   editingHeader: false,
   allActivity: [],
-  allTodos: []
+  allTodos: [],
+  masterTodos: [],
+  contactMap: {}
 };
 
 // ─── Utilities ───────────────────────────────────────────────────────────
@@ -171,8 +173,10 @@ async function renderApp() {
       </div>
       <footer class="border-t border-slate-200 bg-white shrink-0 px-3 py-2 flex items-center gap-2">
         <form id="log-form" class="flex-1 flex items-center gap-2 flex-wrap sm:flex-nowrap">
-          <input id="log-input" type="text" placeholder="Log progress… e.g. 'forwarded proposal' or 'demo Tuesday 2pm'"
+          <input id="log-input" type="text" placeholder="Type or dictate… e.g. 'spoke with Duncan at MotorEasy, demo went well' — auto-routes to the right lead"
             class="flex-1 min-w-0 px-3 py-2 bg-slate-100 border border-transparent focus:bg-white focus:border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-900" />
+          <button type="button" id="log-mic" data-action="mic-toggle" title="Voice dictation"
+            class="px-3 py-2 border border-slate-300 rounded-md hover:bg-slate-50 text-sm font-semibold shrink-0">Mic</button>
           <input id="log-when" type="datetime-local"
             class="text-xs px-2 py-2 border border-slate-200 rounded-md bg-white" title="When did/will this happen? Past = logged. Future = upcoming." />
           <button type="submit" class="px-4 py-2 bg-slate-900 text-white text-sm font-medium rounded-lg hover:bg-slate-800 transition shrink-0">Log</button>
@@ -205,16 +209,31 @@ function leadLastTouched(lead) {
 }
 
 async function loadLeadsAndActivity() {
-  const [leadsRes, actRes, todosRes] = await Promise.all([
+  const [leadsRes, actRes, todosRes, masterRes] = await Promise.all([
     sb.from('leads').select('*').order('updated_at', { ascending: false }),
     sb.from('activity_log').select('id, lead_id, kind, body, event_at, created_at').order('event_at', { ascending: false }).limit(2000),
-    sb.from('todos').select('*').eq('done', false).order('created_at', { ascending: true }).limit(500)
+    sb.from('todos').select('*').eq('done', false).not('lead_id', 'is', null).order('created_at', { ascending: true }).limit(500),
+    sb.from('todos').select('*').is('lead_id', null).order('created_at', { ascending: true })
   ]);
   if (leadsRes.error) toast(leadsRes.error.message, true);
   state.leads = leadsRes.data || [];
   state.allActivity = actRes.data || [];
   state.allTodos = todosRes.data || [];
+  state.masterTodos = masterRes.data || [];
   computeLastEventCache();
+  buildContactMap();
+}
+
+// Build a map of "first-name" → lead_id by parsing "Kontakt: <Name>" out of notes.
+// Used by the smart log bar for auto-routing.
+function buildContactMap() {
+  state.contactMap = {};
+  for (const l of state.leads) {
+    const txt = (l.notes || '');
+    // Hungarian form: "Kontakt: Duncan (CEO)." or "Kontakt: Nic."
+    const matches = txt.matchAll(/Kontakt[:\s]+([A-ZÁÉÍÓÖŐÚÜŰ][\wÀ-ſ]+)/g);
+    for (const m of matches) state.contactMap[m[1].toLowerCase()] = l.id;
+  }
 }
 
 // ─── Data loading ────────────────────────────────────────────────────────
@@ -296,19 +315,21 @@ function renderMain() {
     <div class="max-w-5xl mx-auto p-6 fade-in">
       ${headerHTML(lead)}
       ${progressHTML(lead, idx)}
+      <section class="bg-amber-50 rounded-xl border-2 border-amber-300 p-5 mt-6 shadow-sm">
+        <div class="flex items-center justify-between mb-3 gap-3">
+          <h3 class="text-base font-bold text-slate-900">To do <span class="text-amber-700">· ${state.todos.filter(t=>!t.done).length} open</span></h3>
+        </div>
+        <form id="todo-form" class="flex gap-2 mb-3">
+          <input id="todo-input" type="text" placeholder="What still needs to happen for this lead to sign?"
+            class="flex-1 px-3 py-2 text-sm border border-amber-300 rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-amber-500" />
+          <button type="submit" class="px-4 py-2 bg-slate-900 text-white text-sm font-medium rounded-md hover:bg-slate-800">Add</button>
+        </form>
+        <div id="todo-list">${todosHTML()}</div>
+      </section>
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
-        <section class="lg:col-span-2 bg-white rounded-xl border border-slate-200 p-5">
+        <section class="lg:col-span-3 bg-white rounded-xl border border-slate-200 p-5">
           <h3 class="text-sm font-semibold text-slate-900 mb-3">Activity</h3>
           <div id="activity-list">${activityHTML()}</div>
-        </section>
-        <section class="bg-white rounded-xl border border-slate-200 p-5">
-          <h3 class="text-sm font-semibold text-slate-900 mb-3">To do</h3>
-          <form id="todo-form" class="flex gap-2 mb-3">
-            <input id="todo-input" type="text" placeholder="Add a todo…"
-              class="flex-1 px-2.5 py-1.5 text-sm border border-slate-300 rounded-md focus:outline-none focus:ring-1 focus:ring-slate-900" />
-            <button type="submit" class="px-3 py-1.5 bg-slate-900 text-white text-sm rounded-md hover:bg-slate-800">+</button>
-          </form>
-          <div id="todo-list">${todosHTML()}</div>
         </section>
         <section class="lg:col-span-3 bg-white rounded-xl border border-slate-200 p-5">
           <div class="flex items-center justify-between mb-2">
@@ -420,15 +441,52 @@ function activityItemHTML(a, isFuture) {
 
 function todosHTML() {
   if (state.todos.length === 0) {
-    return `<div class="text-sm text-slate-400 py-2">Nothing to do yet.</div>`;
+    return `<div class="text-sm text-slate-500 py-2">Nothing to do yet. Add the next concrete step above.</div>`;
   }
-  return state.todos.map(t => `
-    <label class="flex items-start gap-2 py-1.5 group cursor-pointer">
+  const open = state.todos.filter(t => !t.done);
+  const done = state.todos.filter(t => t.done);
+  const row = (t) => `
+    <label class="flex items-start gap-2 py-2 group cursor-pointer">
       <input type="checkbox" data-action="toggle-todo" data-id="${t.id}" ${t.done ? 'checked' : ''}
-        class="mt-0.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
-      <span class="flex-1 text-sm ${t.done ? 'line-through text-slate-400' : 'text-slate-700'} break-words">${esc(t.body)}</span>
-      <button data-action="delete-todo" data-id="${t.id}" class="text-slate-300 hover:text-red-600 text-xs opacity-0 group-hover:opacity-100">×</button>
-    </label>`).join('');
+        class="mt-0.5 w-4 h-4 rounded border-amber-400 text-emerald-600 focus:ring-emerald-500" />
+      <span class="flex-1 text-sm font-medium ${t.done ? 'line-through text-slate-400' : 'text-slate-900'} break-words">${esc(t.body)}</span>
+      <button data-action="delete-todo" data-id="${t.id}" class="text-slate-400 hover:text-red-600 text-xs opacity-0 group-hover:opacity-100">×</button>
+    </label>`;
+  let html = open.map(row).join('');
+  if (done.length) html += `<div class="text-[10px] uppercase tracking-wide text-slate-400 mt-3 mb-1">Done · ${done.length}</div>` + done.map(row).join('');
+  return html;
+}
+
+function masterTodosHTML() {
+  const open = (state.masterTodos || []).filter(t => !t.done);
+  const done = (state.masterTodos || []).filter(t => t.done);
+  const row = (t) => `
+    <label class="flex items-start gap-2 py-1.5 group cursor-pointer">
+      <input type="checkbox" data-action="toggle-master-todo" data-id="${t.id}" ${t.done ? 'checked' : ''}
+        class="mt-0.5 w-4 h-4 rounded border-slate-400 text-emerald-600 focus:ring-emerald-500" />
+      <span class="flex-1 text-sm font-semibold ${t.done ? 'line-through text-slate-400' : 'text-slate-900'} break-words">${esc(t.body)}</span>
+      <button data-action="delete-master-todo" data-id="${t.id}" class="text-slate-400 hover:text-red-600 text-xs opacity-0 group-hover:opacity-100">×</button>
+    </label>`;
+  return `
+    <section class="bg-slate-900 text-white rounded-xl p-5 mb-5 shadow-md">
+      <div class="flex items-center justify-between mb-3 gap-3 flex-wrap">
+        <div>
+          <h3 class="text-base font-bold">Master tasks <span class="text-slate-300 font-normal">· standing orders for the team</span></h3>
+          <p class="text-xs text-slate-400 mt-0.5">Always-on rules. Things every team member should be doing across all leads.</p>
+        </div>
+        <span class="text-xs text-slate-300">${open.length} open${done.length ? ` · ${done.length} done` : ''}</span>
+      </div>
+      <form id="master-todo-form" class="flex gap-2 mb-3">
+        <input id="master-todo-input" type="text" placeholder="e.g. Call each lead and report progress every Monday"
+          class="flex-1 px-3 py-2 text-sm bg-slate-800 border border-slate-700 rounded-md text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+        <button type="submit" class="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-md hover:bg-emerald-500">Add</button>
+      </form>
+      <div class="bg-slate-800 rounded-md px-3 py-1 -mx-1">
+        ${state.masterTodos.length === 0
+          ? `<div class="text-xs text-slate-400 py-2">No master tasks yet. These appear here on every refresh until checked off.</div>`
+          : open.map(row).join('') + (done.length ? `<div class="text-[10px] uppercase tracking-wide text-slate-500 mt-3 mb-1">Done · ${done.length}</div>` + done.map(row).join('') : '')}
+      </div>
+    </section>`;
 }
 
 // ─── Overview (step-back dashboard) ──────────────────────────────────────
@@ -534,6 +592,8 @@ async function renderOverview() {
         </div>
         <span class="text-xs text-slate-400">Updated ${new Date().toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'})}</span>
       </div>
+
+      ${masterTodosHTML()}
 
       <div class="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-5">
         ${kpiCardHTML('Total leads', total)}
@@ -737,9 +797,66 @@ async function onClick(e) {
     case 'delete-lead': return deleteLead();
     case 'toggle-todo': return toggleTodo(id, target.checked);
     case 'toggle-todo-overview': return toggleTodoOverview(id, target.checked);
+    case 'toggle-master-todo': return toggleMasterTodo(id, target.checked);
     case 'delete-todo': return deleteTodo(id);
+    case 'delete-master-todo': return deleteMasterTodo(id);
     case 'delete-activity': return deleteActivity(id);
+    case 'mic-toggle': return toggleDictation();
   }
+}
+
+async function addMasterTodo(e) {
+  e.preventDefault();
+  const input = $('#master-todo-input');
+  const body = input.value.trim();
+  if (!body) return;
+  const { data, error } = await sb.from('todos')
+    .insert({ lead_id: null, owner_id: state.user.id, body })
+    .select().single();
+  if (error) return toast(error.message, true);
+  state.masterTodos.push(data);
+  input.value = '';
+  renderOverview();
+}
+
+async function toggleMasterTodo(id, done) {
+  const t = state.masterTodos.find(x => x.id === id);
+  if (!t) return;
+  t.done = done;
+  const { error } = await sb.from('todos').update({ done }).eq('id', id);
+  if (error) return toast(error.message, true);
+  renderOverview();
+}
+
+async function deleteMasterTodo(id) {
+  state.masterTodos = state.masterTodos.filter(t => t.id !== id);
+  const { error } = await sb.from('todos').delete().eq('id', id);
+  if (error) toast(error.message, true);
+  renderOverview();
+}
+
+// Voice dictation into the bottom log bar.
+let dictation = null;
+function toggleDictation() {
+  const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!Rec) return toast('Voice not supported in this browser. Try Chrome or iOS Safari.', true);
+  const btn = $('#log-mic');
+  const input = $('#log-input');
+  if (dictation) { dictation.stop(); dictation = null; btn?.classList.remove('bg-red-600','text-white'); return; }
+  dictation = new Rec();
+  dictation.lang = navigator.language || 'en-US';
+  dictation.continuous = false;
+  dictation.interimResults = true;
+  let baseline = input.value;
+  dictation.onresult = (e) => {
+    const transcript = Array.from(e.results).map(r => r[0].transcript).join('');
+    input.value = (baseline ? baseline + ' ' : '') + transcript;
+  };
+  dictation.onend = () => { dictation = null; btn?.classList.remove('bg-red-600','text-white'); input.focus(); };
+  dictation.onerror = (e) => { toast('Voice error: ' + e.error, true); dictation = null; btn?.classList.remove('bg-red-600','text-white'); };
+  dictation.start();
+  btn?.classList.add('bg-red-600','text-white');
+  toast('Listening… tap mic again to stop');
 }
 
 async function toggleTodoOverview(id, done) {
@@ -768,6 +885,7 @@ async function logTodoCompletion(todo) {
 
 document.body.addEventListener('submit', (e) => {
   if (e.target.id === 'header-form') { e.preventDefault(); saveHeader(e); }
+  if (e.target.id === 'master-todo-form') { addMasterTodo(e); }
 });
 
 async function addLead() {
@@ -839,31 +957,69 @@ async function deleteLead() {
   toast('Lead deleted');
 }
 
+// Try to match the typed text to a lead by name, company, or known contact.
+// Returns { lead, matchedTerm } or null.
+function autoRouteLead(text) {
+  const t = ' ' + text.toLowerCase() + ' ';
+  let best = null;
+  for (const l of state.leads) {
+    const candidates = [l.name, l.company].filter(Boolean);
+    for (const c of candidates) {
+      const k = c.toLowerCase();
+      if (k.length >= 3 && t.includes(' ' + k) || t.includes(k)) {
+        if (!best || k.length > best.matchedTerm.length) best = { lead: l, matchedTerm: c };
+      }
+    }
+  }
+  if (best) return best;
+  for (const [name, leadId] of Object.entries(state.contactMap)) {
+    if (t.includes(' ' + name + ' ') || t.includes(' ' + name + ',') || t.includes(' ' + name + '.')) {
+      const lead = state.leads.find(l => l.id === leadId);
+      if (lead) return { lead, matchedTerm: name };
+    }
+  }
+  return null;
+}
+
 async function onLogSubmit(e) {
   e.preventDefault();
   const input = $('#log-input');
   const body = input.value.trim();
   if (!body) return toast('Type something to log first', true);
-  if (!state.selectedId) return toast('Pick a lead from the sidebar first', true);
+
+  // Smart routing: try to find the lead from the text first; fall back to current selection.
+  const routed = autoRouteLead(body);
+  const targetLeadId = routed?.lead.id || state.selectedId;
+  if (!targetLeadId) {
+    return toast('Mention a lead by name (e.g. "MotorEasy demo done") or open a lead first', true);
+  }
+
   const whenInput = $('#log-when').value;
   const event_at = whenInput ? new Date(whenInput).toISOString() : new Date().toISOString();
   const kind = inferKind(body);
   const { data, error } = await sb.from('activity_log')
-    .insert({ lead_id: state.selectedId, owner_id: state.user.id, body, kind, event_at })
+    .insert({ lead_id: targetLeadId, owner_id: state.user.id, body, kind, event_at })
     .select().single();
   if (error) return toast(error.message, true);
-  state.activity.unshift(data);
+  if (targetLeadId === state.selectedId) state.activity.unshift(data);
   state.allActivity.unshift(data);
   computeLastEventCache();
   input.value = '';
   $('#log-when').value = nowLocal();
-  const lead = state.leads.find(l => l.id === state.selectedId);
+  const lead = state.leads.find(l => l.id === targetLeadId);
   const stamp = new Date().toISOString();
   if (lead) lead.updated_at = stamp;
-  await sb.from('leads').update({ updated_at: stamp }).eq('id', state.selectedId);
+  await sb.from('leads').update({ updated_at: stamp }).eq('id', targetLeadId);
   renderSidebar();
-  $('#activity-list').innerHTML = activityHTML();
-  toast(new Date(event_at) > new Date() ? 'Scheduled' : 'Logged');
+  if ($('#activity-list') && targetLeadId === state.selectedId) $('#activity-list').innerHTML = activityHTML();
+  if (!state.selectedId) renderOverview();
+
+  const verb = new Date(event_at) > new Date() ? 'Scheduled' : 'Logged';
+  if (routed && routed.lead.id !== state.selectedId) {
+    toast(`${verb} on ${routed.lead.name} (matched "${routed.matchedTerm}")`);
+  } else {
+    toast(verb);
+  }
 }
 
 async function onTodoSubmit(e) {
