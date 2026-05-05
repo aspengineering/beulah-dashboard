@@ -498,36 +498,31 @@ function masterTodosHTML() {
     const due = fmtDue(t.due_at);
     const overdue = !t.done && due?.overdue;
     return `
-    <label class="flex items-start gap-2 py-1.5 group cursor-pointer ${overdue ? 'bg-red-950/40 -mx-2 px-2 rounded-md border-l-4 border-red-500' : ''}">
+    <label class="flex items-start gap-2 py-2 group cursor-pointer ${overdue ? 'bg-red-50 -mx-2 px-2 rounded-md border-l-4 border-red-500' : ''}">
       <input type="checkbox" data-action="toggle-master-todo" data-id="${t.id}" ${t.done ? 'checked' : ''}
-        class="mt-0.5 w-4 h-4 rounded border-slate-400 text-emerald-600 focus:ring-emerald-500" />
-      <span class="flex-1 text-sm font-semibold ${t.done ? 'line-through text-slate-400' : (overdue ? 'text-red-400' : 'text-slate-100')} break-words">
+        class="mt-0.5 w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
+      <span class="flex-1 text-sm font-medium ${t.done ? 'line-through text-slate-400' : 'text-slate-900'} break-words">
         ${esc(t.body)}${dueBadgeHTML(t, overdue)}
       </span>
-      <button data-action="delete-master-todo" data-id="${t.id}" class="text-slate-400 hover:text-red-500 text-xs opacity-0 group-hover:opacity-100">×</button>
+      <button data-action="delete-master-todo" data-id="${t.id}" class="text-slate-300 hover:text-red-600 text-xs opacity-0 group-hover:opacity-100">×</button>
     </label>`;
   };
   return `
-    <section class="${overdueCount > 0 ? 'bg-red-950 ring-2 ring-red-500' : 'bg-slate-900'} text-white rounded-xl p-5 mb-5 shadow-md transition">
+    <section class="bg-white rounded-xl border border-slate-200 p-5 mb-5">
       <div class="flex items-center justify-between mb-3 gap-3 flex-wrap">
-        <div>
-          <h3 class="text-base font-bold">Master tasks <span class="text-slate-300 font-normal">· standing orders for the team</span></h3>
-          <p class="text-xs text-slate-400 mt-0.5">Always-on rules. Things every team member should be doing across all leads.</p>
-        </div>
-        <span class="text-xs ${overdueCount > 0 ? 'text-red-300 font-bold' : 'text-slate-300'}">${overdueCount > 0 ? overdueCount + ' OVERDUE · ' : ''}${open.length} open${done.length ? ` · ${done.length} done` : ''}</span>
+        <h3 class="text-base font-semibold text-slate-900">Master tasks</h3>
+        <span class="text-xs ${overdueCount > 0 ? 'text-red-600 font-bold' : 'text-slate-500'}">${overdueCount > 0 ? overdueCount + ' overdue · ' : ''}${open.length} open${done.length ? ` · ${done.length} done` : ''}</span>
       </div>
       <form id="master-todo-form" class="flex gap-2 mb-3 flex-wrap sm:flex-nowrap">
         <input id="master-todo-input" type="text" placeholder="e.g. Call each lead — follow-up call (not email)"
-          class="flex-1 min-w-0 px-3 py-2 text-sm bg-slate-800 border border-slate-700 rounded-md text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+          class="flex-1 min-w-0 px-3 py-2 text-sm border border-slate-300 rounded-md focus:outline-none focus:ring-1 focus:ring-slate-900" />
         <input id="master-todo-due" type="date" title="Due date (optional)"
-          class="px-2 py-2 text-sm bg-slate-800 border border-slate-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-        <button type="submit" class="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-md hover:bg-emerald-500 shrink-0">Add</button>
+          class="px-2 py-2 text-sm border border-slate-300 rounded-md focus:outline-none focus:ring-1 focus:ring-slate-900" />
+        <button type="submit" class="px-4 py-2 bg-slate-900 text-white text-sm font-medium rounded-md hover:bg-slate-800 shrink-0">Add</button>
       </form>
-      <div class="bg-slate-800 rounded-md px-3 py-1 -mx-1">
-        ${state.masterTodos.length === 0
-          ? `<div class="text-xs text-slate-400 py-2">No master tasks yet. These appear here on every refresh until checked off.</div>`
-          : open.map(row).join('') + (done.length ? `<div class="text-[10px] uppercase tracking-wide text-slate-500 mt-3 mb-1">Done · ${done.length}</div>` + done.map(row).join('') : '')}
-      </div>
+      ${state.masterTodos.length === 0
+        ? `<div class="text-xs text-slate-400 py-2">No master tasks yet.</div>`
+        : open.map(row).join('') + (done.length ? `<div class="text-[10px] uppercase tracking-wide text-slate-400 mt-3 mb-1">Done · ${done.length}</div>` + done.map(row).join('') : '')}
     </section>`;
 }
 
