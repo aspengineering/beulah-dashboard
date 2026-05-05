@@ -27,10 +27,14 @@ create table if not exists activity_log (
   kind text not null default 'note'
     check (kind in ('note','email','call','meeting')),
   body text not null,
+  event_at timestamptz default now() not null,
   created_at timestamptz default now()
 );
 
-create index if not exists activity_lead_idx on activity_log(lead_id, created_at desc);
+-- Idempotent for upgrades from earlier versions:
+alter table activity_log add column if not exists event_at timestamptz default now() not null;
+
+create index if not exists activity_lead_event_idx on activity_log(lead_id, event_at desc);
 
 -- Todos: outstanding tasks per lead
 create table if not exists todos (
