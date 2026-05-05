@@ -31,7 +31,8 @@ const SUPABASE_ANON_KEY = 'sb_publishable_q6kTC_otM9TSUwT8cjZ57g_-zds04Gw';
 // ─────────────────────────────────────────────────────────────────────────
 
 const STAGES = ['Lead', 'Contacted', 'Proposal', 'Negotiating', 'Signed'];
-const KIND_ICONS = { note: '📝', email: '✉️', call: '📞', meeting: '👥' };
+const KIND_LABELS = { note: 'Note', email: 'Email', call: 'Call', meeting: 'Meeting' };
+const STALE_DAYS = 3;
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -108,7 +109,7 @@ function renderConfigError() {
   root().innerHTML = `
     <div class="h-full flex items-center justify-center p-8">
       <div class="max-w-lg bg-white border border-amber-300 rounded-xl p-6 shadow-sm">
-        <h1 class="text-xl font-semibold text-amber-800 mb-2">⚙️ Setup needed</h1>
+        <h1 class="text-xl font-semibold text-amber-800 mb-2">Setup needed</h1>
         <p class="text-slate-700 mb-3">Open <code class="bg-slate-100 px-1.5 py-0.5 rounded">index.html</code> in a text editor and replace these two values near the top:</p>
         <pre class="bg-slate-100 text-xs p-3 rounded overflow-auto"><code>const SUPABASE_URL      = 'YOUR_SUPABASE_URL';
 const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';</code></pre>
@@ -158,10 +159,10 @@ async function renderApp() {
           <span class="text-xl font-bold">Beulah</span>
           <span class="text-xs text-slate-400 hidden sm:inline">Sales dashboard</span>
         </button>
-        <div class="flex items-center gap-3 text-sm">
-          <button data-action="go-home" class="text-slate-600 hover:text-slate-900 text-xs px-2 py-1 border border-slate-200 rounded-md">🏠 Overview</button>
-          <span class="text-slate-600 hidden sm:inline">${esc(state.user.email)}</span>
-          <button data-action="logout" class="text-slate-500 hover:text-slate-900" title="Sign out">⏻</button>
+        <div class="flex items-center gap-2 text-sm">
+          <button data-action="go-home" class="text-slate-700 hover:text-slate-900 text-xs px-2.5 py-1.5 border border-slate-300 rounded-md hover:bg-slate-50">Overview</button>
+          <span class="text-slate-600 hidden sm:inline text-xs">${esc(state.user.email)}</span>
+          <button data-action="logout" class="text-slate-600 hover:text-slate-900 text-xs px-2.5 py-1.5 border border-slate-300 rounded-md hover:bg-slate-50">Sign out</button>
         </div>
       </header>
       <div class="flex-1 flex overflow-hidden">
@@ -170,7 +171,6 @@ async function renderApp() {
       </div>
       <footer class="border-t border-slate-200 bg-white shrink-0 px-3 py-2 flex items-center gap-2">
         <form id="log-form" class="flex-1 flex items-center gap-2 flex-wrap sm:flex-nowrap">
-          <span class="text-slate-400 text-lg">💬</span>
           <input id="log-input" type="text" placeholder="Log progress… e.g. 'forwarded proposal' or 'demo Tuesday 2pm'"
             class="flex-1 min-w-0 px-3 py-2 bg-slate-100 border border-transparent focus:bg-white focus:border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-900" />
           <input id="log-when" type="datetime-local"
@@ -185,18 +185,39 @@ async function renderApp() {
   $('#log-form').addEventListener('submit', onLogSubmit);
   $('#log-when').value = nowLocal();
 
-  await loadLeads();
+  await loadLeadsAndActivity();
   renderSidebar();
   renderMain();
 }
 
-// ─── Data loading ────────────────────────────────────────────────────────
-async function loadLeads() {
-  const { data, error } = await sb.from('leads').select('*').order('updated_at', { ascending: false });
-  if (error) return toast(error.message, true);
-  state.leads = data || [];
+function computeLastEventCache() {
+  state.lastEventByLead = {};
+  const now = Date.now();
+  for (const a of state.allActivity) {
+    const t = new Date(a.event_at).getTime();
+    if (t > now) continue;
+    const cur = state.lastEventByLead[a.lead_id];
+    if (!cur || new Date(cur) < new Date(a.event_at)) state.lastEventByLead[a.lead_id] = a.event_at;
+  }
+}
+function leadLastTouched(lead) {
+  return state.lastEventByLead?.[lead.id] || lead.created_at;
 }
 
+async function loadLeadsAndActivity() {
+  const [leadsRes, actRes, todosRes] = await Promise.all([
+    sb.from('leads').select('*').order('updated_at', { ascending: false }),
+    sb.from('activity_log').select('id, lead_id, kind, body, event_at, created_at').order('event_at', { ascending: false }).limit(2000),
+    sb.from('todos').select('*').eq('done', false).order('created_at', { ascending: true }).limit(500)
+  ]);
+  if (leadsRes.error) toast(leadsRes.error.message, true);
+  state.leads = leadsRes.data || [];
+  state.allActivity = actRes.data || [];
+  state.allTodos = todosRes.data || [];
+  computeLastEventCache();
+}
+
+// ─── Data loading ────────────────────────────────────────────────────────
 async function loadLeadDetail(id) {
   const [a, t] = await Promise.all([
     sb.from('activity_log').select('*').eq('lead_id', id).order('event_at', { ascending: false }),
@@ -212,7 +233,7 @@ function renderSidebar() {
   const sorted = [...filtered].sort((a, b) => {
     if (state.sort === 'name') return a.name.localeCompare(b.name);
     if (state.sort === 'stage') return stageIndex(b.stage) - stageIndex(a.stage);
-    return new Date(b.updated_at) - new Date(a.updated_at);
+    return new Date(leadLastTouched(b)) - new Date(leadLastTouched(a));
   });
 
   $('#sidebar').innerHTML = `
@@ -254,7 +275,7 @@ function leadCardHTML(lead) {
       class="w-full text-left p-3 border-b border-slate-100 transition ${isSel ? 'bg-slate-100' : 'hover:bg-slate-50'}">
       <div class="flex items-center justify-between mb-1">
         <span class="font-medium text-sm text-slate-900 truncate">${esc(lead.name)}</span>
-        <span class="text-[10px] text-slate-500 shrink-0 ml-2">${fmtRelative(lead.updated_at)}</span>
+        <span class="text-[10px] text-slate-500 shrink-0 ml-2">${fmtRelative(leadLastTouched(lead))}</span>
       </div>
       ${lead.company ? `<div class="text-xs text-slate-500 mb-2 truncate">${esc(lead.company)}</div>` : '<div class="mb-2"></div>'}
       <div class="flex items-center gap-1.5 mb-1">${segments}</div>
@@ -333,9 +354,7 @@ function headerHTML(lead) {
         ${lead.company ? `<div class="text-slate-600 text-sm mt-0.5 break-words">${esc(lead.company)}</div>` : ''}
         ${contact ? `<div class="text-slate-500 text-xs mt-1 break-words">${contact}</div>` : ''}
       </div>
-      <button data-action="edit-header" class="px-3 py-1.5 text-sm border border-slate-300 rounded-md hover:bg-slate-50 shrink-0 flex items-center gap-1">
-        <span>✎</span><span>Edit</span>
-      </button>
+      <button data-action="edit-header" class="px-3 py-1.5 text-sm border border-slate-300 rounded-md hover:bg-slate-50 shrink-0">Edit</button>
     </div>`;
 }
 
@@ -357,7 +376,7 @@ function progressHTML(lead, idx) {
         <span class="text-sm font-semibold text-slate-900">Pipeline progress · ${idx + 1} of ${STAGES.length}</span>
         ${nextStage
           ? `<button data-action="set-stage" data-stage="${nextStage}" class="px-3 py-1.5 bg-emerald-600 text-white text-xs font-medium rounded-md hover:bg-emerald-700 transition">Advance to ${nextStage} →</button>`
-          : `<span class="px-3 py-1.5 bg-emerald-50 text-emerald-700 text-xs font-semibold rounded-md">✅ Signed</span>`}
+          : `<span class="px-3 py-1.5 bg-emerald-50 text-emerald-700 text-xs font-semibold rounded-md">Signed</span>`}
       </div>
       <div class="flex items-start">${segments}</div>
       <div class="text-[11px] text-slate-400 mt-2">Tap any stage to jump there.</div>
@@ -377,7 +396,7 @@ function activityHTML() {
     .sort((a, b) => new Date(b.event_at) - new Date(a.event_at));
   let html = '';
   if (upcoming.length) {
-    html += `<div class="text-[11px] font-semibold uppercase tracking-wide text-blue-600 mb-2 mt-1">⏰ Upcoming · ${upcoming.length}</div>`;
+    html += `<div class="text-[11px] font-semibold uppercase tracking-wide text-blue-600 mb-2 mt-1">Upcoming · ${upcoming.length}</div>`;
     html += upcoming.map(a => activityItemHTML(a, true)).join('');
   }
   if (past.length) {
@@ -390,7 +409,7 @@ function activityHTML() {
 function activityItemHTML(a, isFuture) {
   return `
     <div class="flex gap-3 py-2.5 border-b border-slate-100 last:border-0 fade-in group ${isFuture ? 'bg-blue-50/40 -mx-2 px-2 rounded-md' : ''}">
-      <span class="text-base pt-0.5 shrink-0">${KIND_ICONS[a.kind] || '📝'}</span>
+      <span class="text-[10px] uppercase tracking-wide font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded shrink-0 mt-0.5 h-5">${KIND_LABELS[a.kind] || 'Note'}</span>
       <div class="flex-1 min-w-0">
         <div class="text-sm ${isFuture ? 'text-slate-800' : 'text-slate-900'} break-words">${esc(a.body)}</div>
         <div class="text-[11px] ${isFuture ? 'text-blue-600 font-medium' : 'text-slate-400'} mt-0.5">${fmtDate(a.event_at)}</div>
@@ -414,49 +433,79 @@ function todosHTML() {
 
 // ─── Overview (step-back dashboard) ──────────────────────────────────────
 async function renderOverview() {
-  if (state.leads.length === 0) {
-    await loadLeads();
-  }
-  const [act, td] = await Promise.all([
-    sb.from('activity_log').select('id, lead_id, kind, body, event_at, created_at').order('event_at', { ascending: false }).limit(500),
-    sb.from('todos').select('*').eq('done', false).order('created_at', { ascending: true }).limit(200)
-  ]);
-  state.allActivity = act.data || [];
-  state.allTodos = td.data || [];
+  await loadLeadsAndActivity();
 
   const now = Date.now();
   const total = state.leads.length;
   const signed = state.leads.filter(l => l.stage === 'Signed').length;
   const active = total - signed;
+  const staleMs = STALE_DAYS * 86400000;
+
+  // Activity counts (last 14 days, past only) for "hot" ranking
+  const fortnightAgo = now - 14 * 86400000;
+  const recentCounts = {};
+  state.allActivity.forEach(a => {
+    const t = new Date(a.event_at).getTime();
+    if (t > fortnightAgo && t <= now) recentCounts[a.lead_id] = (recentCounts[a.lead_id] || 0) + 1;
+  });
+
+  // Open todo counts per lead
+  const todoCounts = {};
+  state.allTodos.forEach(t => { todoCounts[t.lead_id] = (todoCounts[t.lead_id] || 0) + 1; });
+
+  // Upcoming events per lead (future)
   const upcoming = state.allActivity.filter(a => new Date(a.event_at).getTime() > now)
     .sort((a, b) => new Date(a.event_at) - new Date(b.event_at));
+  const upcomingByLead = {};
+  upcoming.forEach(a => { upcomingByLead[a.lead_id] = (upcomingByLead[a.lead_id] || 0) + 1; });
 
+  // Pipeline distribution
   const dist = {};
   STAGES.forEach(s => dist[s] = 0);
   state.leads.forEach(l => { dist[l.stage] = (dist[l.stage] || 0) + 1; });
   const maxStage = Math.max(1, ...Object.values(dist));
 
-  // Hottest: leads with most activity in last 14 days, then most recent log
-  const fortnightAgo = now - 14 * 86400000;
-  const counts = {}, latest = {};
-  state.allActivity.forEach(a => {
-    const t = new Date(a.event_at).getTime();
-    if (t > fortnightAgo && t <= now) counts[a.lead_id] = (counts[a.lead_id] || 0) + 1;
-    if (!latest[a.lead_id] || new Date(latest[a.lead_id]) < new Date(a.event_at)) latest[a.lead_id] = a.event_at;
-  });
-  const hottest = state.leads
-    .map(l => ({ ...l, count: counts[l.id] || 0, latest: latest[l.id] }))
-    .filter(l => l.stage !== 'Signed')
-    .sort((a, b) => (b.count - a.count) || (new Date(b.latest || 0) - new Date(a.latest || 0)))
-    .slice(0, 6);
+  // Decorate every lead with computed fields
+  const decorated = state.leads.map(l => ({
+    ...l,
+    lastTouched: leadLastTouched(l),
+    count14d: recentCounts[l.id] || 0,
+    openTodos: todoCounts[l.id] || 0,
+    upcomingCount: upcomingByLead[l.id] || 0
+  }));
 
-  // Stale: active leads with no activity in 14+ days
-  const stale = state.leads
-    .filter(l => l.stage !== 'Signed' && (!latest[l.id] || new Date(latest[l.id]).getTime() < fortnightAgo))
-    .sort((a, b) => new Date(a.updated_at) - new Date(b.updated_at))
+  // Hottest: most activity last 14 days; tiebreak by most recent touch
+  const hottest = decorated
+    .filter(l => l.stage !== 'Signed')
+    .sort((a, b) => (b.count14d - a.count14d) || (new Date(b.lastTouched) - new Date(a.lastTouched)))
+    .slice(0, 8);
+
+  // Going stale: active and last touched more than STALE_DAYS ago
+  const stale = decorated
+    .filter(l => l.stage !== 'Signed' && (now - new Date(l.lastTouched).getTime()) > staleMs)
+    .sort((a, b) => new Date(a.lastTouched) - new Date(b.lastTouched))
+    .slice(0, 8);
+
+  // Needs follow-up: active leads with no scheduled future event
+  const needsFollowup = decorated
+    .filter(l => l.stage !== 'Signed' && l.upcomingCount === 0)
+    .sort((a, b) => new Date(a.lastTouched) - new Date(b.lastTouched))
+    .slice(0, 8);
+
+  // Recent wins: leads signed in the last 30 days
+  const monthAgo = now - 30 * 86400000;
+  const recentWins = decorated
+    .filter(l => l.stage === 'Signed' && new Date(l.updated_at).getTime() > monthAgo)
+    .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
     .slice(0, 5);
 
-  // Activity sparkline: count per day for last 14 days
+  // Recent activity feed (last 12 past entries across all leads)
+  const recentActivity = state.allActivity
+    .filter(a => new Date(a.event_at).getTime() <= now)
+    .sort((a, b) => new Date(b.event_at) - new Date(a.event_at))
+    .slice(0, 12);
+
+  // 14-day sparkline
   const days = [];
   for (let i = 13; i >= 0; i--) {
     const dayStart = new Date(); dayStart.setHours(0,0,0,0); dayStart.setDate(dayStart.getDate() - i);
@@ -468,6 +517,7 @@ async function renderOverview() {
     days.push({ date: dayStart, count: c });
   }
   const sparkMax = Math.max(1, ...days.map(d => d.count));
+  const totalLogs = days.reduce((s, d) => s + d.count, 0);
 
   // Todos grouped by lead
   const todosByLead = {};
@@ -476,8 +526,8 @@ async function renderOverview() {
   });
 
   $('#main').innerHTML = `
-    <div class="max-w-6xl mx-auto p-4 sm:p-6 fade-in">
-      <div class="flex items-baseline justify-between mb-5">
+    <div class="max-w-7xl mx-auto p-4 sm:p-6 fade-in">
+      <div class="flex items-baseline justify-between mb-5 gap-3 flex-wrap">
         <div>
           <h2 class="text-2xl font-bold text-slate-900">Overview</h2>
           <p class="text-sm text-slate-500">Everything across all leads, at a glance</p>
@@ -485,26 +535,34 @@ async function renderOverview() {
         <span class="text-xs text-slate-400">Updated ${new Date().toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'})}</span>
       </div>
 
-      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+      <div class="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-5">
         ${kpiCardHTML('Total leads', total)}
         ${kpiCardHTML('Active', active)}
         ${kpiCardHTML('Signed', signed, 'emerald')}
         ${kpiCardHTML('Upcoming', upcoming.length, 'blue')}
+        ${kpiCardHTML('Open todos', state.allTodos.length)}
       </div>
 
-      <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-5">
         <section class="lg:col-span-2 bg-white rounded-xl border border-slate-200 p-5">
-          <h3 class="text-sm font-semibold text-slate-900 mb-4">Pipeline distribution</h3>
+          <div class="flex items-baseline justify-between mb-4">
+            <h3 class="text-sm font-semibold text-slate-900">Pipeline distribution</h3>
+            <span class="text-[11px] text-slate-400">Tap a bar to filter</span>
+          </div>
           <div class="space-y-2.5">
             ${STAGES.map(stage => {
               const count = dist[stage] || 0;
               const pct = (count / maxStage) * 100;
+              const stagePct = total ? Math.round((count / total) * 100) : 0;
               return `
                 <button data-action="filter-stage" data-stage="${stage}" class="w-full flex items-center gap-3 group">
                   <div class="w-24 text-xs text-slate-600 shrink-0 text-left">${stage}</div>
                   <div class="flex-1 bg-slate-100 rounded-md h-7 overflow-hidden relative">
                     <div class="h-full bg-emerald-500 group-hover:bg-emerald-600 transition-all" style="width: ${pct}%"></div>
-                    <div class="absolute inset-0 flex items-center px-2 text-xs font-semibold ${count > 0 ? 'text-white' : 'text-slate-400'}">${count}</div>
+                    <div class="absolute inset-0 flex items-center justify-between px-2 text-xs font-semibold">
+                      <span class="${count > 0 ? 'text-white' : 'text-slate-400'}">${count}</span>
+                      <span class="${count > 0 ? 'text-white/80' : 'text-slate-400'}">${stagePct}%</span>
+                    </div>
                   </div>
                 </button>`;
             }).join('')}
@@ -512,50 +570,11 @@ async function renderOverview() {
         </section>
 
         <section class="bg-white rounded-xl border border-slate-200 p-5">
-          <h3 class="text-sm font-semibold text-slate-900 mb-3">🔥 Hottest leads</h3>
-          ${hottest.length === 0
-            ? `<div class="text-xs text-slate-400">No leads yet, or no recent activity. Add a lead and log something to start ranking.</div>`
-            : `<div class="space-y-1">${hottest.map(l => `
-                <button data-action="select-lead" data-id="${l.id}" class="w-full text-left p-2 rounded-md hover:bg-slate-50 transition flex items-center justify-between gap-2">
-                  <div class="min-w-0">
-                    <div class="text-sm font-medium text-slate-900 truncate">${esc(l.name)}</div>
-                    <div class="text-xs text-slate-500 truncate">${esc(l.stage)}${l.company ? ' · ' + esc(l.company) : ''}</div>
-                  </div>
-                  <span class="text-xs font-semibold ${l.count > 0 ? 'text-emerald-600' : 'text-slate-400'} shrink-0">${l.count > 0 ? l.count + (l.count===1?' log':' logs') : '—'}</span>
-                </button>`).join('')}</div>`}
-        </section>
-
-        <section class="lg:col-span-2 bg-white rounded-xl border border-slate-200 p-5">
-          <h3 class="text-sm font-semibold text-slate-900 mb-3">⏰ Upcoming · ${upcoming.length}</h3>
-          ${upcoming.length === 0
-            ? `<div class="text-xs text-slate-400">Nothing scheduled. Open a lead and use the bottom log bar with a future date to plan ahead.</div>`
-            : `<div class="space-y-1">${upcoming.slice(0, 8).map(a => {
-                const lead = state.leads.find(l => l.id === a.lead_id);
-                return `
-                  <button data-action="select-lead" data-id="${a.lead_id}" class="w-full text-left flex gap-3 py-2 px-2 rounded-md hover:bg-slate-50 transition">
-                    <span class="text-base shrink-0">${KIND_ICONS[a.kind] || '📝'}</span>
-                    <div class="flex-1 min-w-0">
-                      <div class="text-sm text-slate-900 truncate">${esc(a.body)}</div>
-                      <div class="text-[11px] text-blue-600 font-medium mt-0.5">${fmtDate(a.event_at)}${lead ? ' · ' + esc(lead.name) : ''}</div>
-                    </div>
-                  </button>`;
-              }).join('')}</div>`}
-        </section>
-
-        <section class="bg-white rounded-xl border border-slate-200 p-5">
-          <h3 class="text-sm font-semibold text-slate-900 mb-3">😴 Going stale</h3>
-          ${stale.length === 0
-            ? `<div class="text-xs text-slate-400">All active leads have recent activity — nice work.</div>`
-            : `<div class="space-y-1">${stale.map(l => `
-                <button data-action="select-lead" data-id="${l.id}" class="w-full text-left p-2 rounded-md hover:bg-slate-50 transition">
-                  <div class="text-sm font-medium text-slate-900 truncate">${esc(l.name)}</div>
-                  <div class="text-xs text-slate-500 truncate">${esc(l.stage)} · last touched ${fmtRelative(l.updated_at)}</div>
-                </button>`).join('')}</div>`}
-        </section>
-
-        <section class="lg:col-span-3 bg-white rounded-xl border border-slate-200 p-5">
-          <h3 class="text-sm font-semibold text-slate-900 mb-3">Activity · last 14 days</h3>
-          <div class="flex items-end gap-1 h-24">
+          <div class="flex items-baseline justify-between mb-3">
+            <h3 class="text-sm font-semibold text-slate-900">Activity · last 14 days</h3>
+            <span class="text-[11px] text-slate-500 font-medium">${totalLogs} logs</span>
+          </div>
+          <div class="flex items-end gap-1 h-20">
             ${days.map(d => {
               const h = (d.count / sparkMax) * 100;
               const isToday = d.date.toDateString() === new Date().toDateString();
@@ -570,29 +589,119 @@ async function renderOverview() {
             <span>Today</span>
           </div>
         </section>
+      </div>
 
-        <section class="lg:col-span-3 bg-white rounded-xl border border-slate-200 p-5">
-          <h3 class="text-sm font-semibold text-slate-900 mb-3">✅ Open todos · ${state.allTodos.length}</h3>
-          ${state.allTodos.length === 0
-            ? `<div class="text-xs text-slate-400">No open todos. You're caught up.</div>`
-            : `<div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1">
-                ${Object.entries(todosByLead).map(([leadId, todos]) => {
-                  const lead = state.leads.find(l => l.id === leadId);
-                  if (!lead) return '';
-                  return `
-                    <div class="py-2 border-b border-slate-100">
-                      <button data-action="select-lead" data-id="${leadId}" class="text-xs font-semibold text-slate-700 hover:text-slate-900 mb-1 block">${esc(lead.name)} <span class="text-slate-400 font-normal">· ${esc(lead.stage)}</span></button>
-                      ${todos.map(t => `
-                        <div class="flex items-start gap-2 py-1">
-                          <input type="checkbox" data-action="toggle-todo-overview" data-id="${t.id}" class="mt-0.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
-                          <span class="text-sm text-slate-700 break-words">${esc(t.body)}</span>
-                        </div>`).join('')}
-                    </div>`;
-                }).join('')}
-              </div>`}
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 mb-5">
+        ${leadListSectionHTML('Hottest leads', 'Most logs in the last 14 days. Where momentum is.', hottest, 'count14d', 'logs / 14d', 'No activity in the last 14 days yet.')}
+        ${leadListSectionHTML('Needs follow-up', 'Active leads with no scheduled next step.', needsFollowup, null, null, 'Every active lead has a future event scheduled.')}
+        ${leadListSectionHTML('Going stale', 'Active leads not touched in ' + STALE_DAYS + '+ days.', stale, null, null, 'No leads are stale. All caught up.')}
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-5">
+        <section class="lg:col-span-2 bg-white rounded-xl border border-slate-200 p-5">
+          <h3 class="text-sm font-semibold text-slate-900 mb-3">Upcoming scheduled · ${upcoming.length}</h3>
+          ${upcoming.length === 0
+            ? `<div class="text-xs text-slate-400">Nothing scheduled. Open a lead and use the bottom log bar with a future date to plan ahead.</div>`
+            : `<div class="space-y-1">${upcoming.slice(0, 10).map(a => {
+                const lead = state.leads.find(l => l.id === a.lead_id);
+                return `
+                  <button data-action="select-lead" data-id="${a.lead_id}" class="w-full text-left flex gap-3 py-2 px-2 rounded-md hover:bg-slate-50 transition">
+                    <span class="text-[10px] uppercase tracking-wide font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded shrink-0 mt-0.5 h-5">${KIND_LABELS[a.kind] || 'Note'}</span>
+                    <div class="flex-1 min-w-0">
+                      <div class="text-sm text-slate-900 truncate">${esc(a.body)}</div>
+                      <div class="text-[11px] text-blue-600 font-medium mt-0.5">${fmtDate(a.event_at)}${lead ? ' · ' + esc(lead.name) : ''}</div>
+                    </div>
+                  </button>`;
+              }).join('')}</div>`}
+        </section>
+
+        <section class="bg-white rounded-xl border border-slate-200 p-5">
+          <h3 class="text-sm font-semibold text-slate-900 mb-3">Recent wins · last 30 days</h3>
+          ${recentWins.length === 0
+            ? `<div class="text-xs text-slate-400">No deals signed in the last 30 days.</div>`
+            : `<div class="space-y-1">${recentWins.map(l => `
+                <button data-action="select-lead" data-id="${l.id}" class="w-full text-left p-2 rounded-md hover:bg-slate-50 transition">
+                  <div class="text-sm font-medium text-slate-900 truncate">${esc(l.name)}</div>
+                  <div class="text-xs text-emerald-600 truncate">Signed ${fmtRelative(l.updated_at)}${l.company ? ' · ' + esc(l.company) : ''}</div>
+                </button>`).join('')}</div>`}
         </section>
       </div>
+
+      <section class="bg-white rounded-xl border border-slate-200 p-5 mb-5">
+        <h3 class="text-sm font-semibold text-slate-900 mb-3">Recent activity · across all leads</h3>
+        ${recentActivity.length === 0
+          ? `<div class="text-xs text-slate-400">No activity logged yet.</div>`
+          : `<div class="space-y-0.5">${recentActivity.map(a => {
+              const lead = state.leads.find(l => l.id === a.lead_id);
+              return `
+                <button data-action="select-lead" data-id="${a.lead_id}" class="w-full text-left flex gap-3 py-2 px-2 rounded-md hover:bg-slate-50 transition">
+                  <span class="text-[10px] uppercase tracking-wide font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded shrink-0 mt-0.5 h-5">${KIND_LABELS[a.kind] || 'Note'}</span>
+                  <div class="flex-1 min-w-0">
+                    <div class="text-sm text-slate-900 truncate">${esc(a.body)}</div>
+                    <div class="text-[11px] text-slate-400 mt-0.5">${fmtDate(a.event_at)}${lead ? ' · ' + esc(lead.name) : ''}</div>
+                  </div>
+                </button>`;
+            }).join('')}</div>`}
+      </section>
+
+      <section class="bg-white rounded-xl border border-slate-200 p-5">
+        <h3 class="text-sm font-semibold text-slate-900 mb-3">Open todos · ${state.allTodos.length}</h3>
+        ${state.allTodos.length === 0
+          ? `<div class="text-xs text-slate-400">No open todos. You're caught up.</div>`
+          : `<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-1">
+              ${Object.entries(todosByLead).map(([leadId, todos]) => {
+                const lead = state.leads.find(l => l.id === leadId);
+                if (!lead) return '';
+                return `
+                  <div class="py-2 border-b border-slate-100">
+                    <button data-action="select-lead" data-id="${leadId}" class="text-xs font-semibold text-slate-700 hover:text-slate-900 mb-1 block">${esc(lead.name)} <span class="text-slate-400 font-normal">· ${esc(lead.stage)}</span></button>
+                    ${todos.map(t => `
+                      <div class="flex items-start gap-2 py-1">
+                        <input type="checkbox" data-action="toggle-todo-overview" data-id="${t.id}" class="mt-0.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
+                        <span class="text-sm text-slate-700 break-words">${esc(t.body)}</span>
+                      </div>`).join('')}
+                  </div>`;
+              }).join('')}
+            </div>`}
+      </section>
     </div>`;
+}
+
+function leadListSectionHTML(title, subtitle, leads, metricKey, metricLabel, emptyText) {
+  return `
+    <section class="bg-white rounded-xl border border-slate-200 p-5">
+      <h3 class="text-sm font-semibold text-slate-900">${title}</h3>
+      <p class="text-[11px] text-slate-400 mb-3">${subtitle}</p>
+      ${leads.length === 0
+        ? `<div class="text-xs text-slate-400">${emptyText}</div>`
+        : `<div class="space-y-0.5">${leads.map(l => leadRowHTML(l, metricKey, metricLabel)).join('')}</div>`}
+    </section>`;
+}
+
+function leadRowHTML(l, metricKey, metricLabel) {
+  const stageIdx = stageIndex(l.stage);
+  const stageDots = STAGES.map((_, i) => `<span class="h-1 w-3 rounded-full ${i <= stageIdx ? 'bg-emerald-500' : 'bg-slate-200'}"></span>`).join('');
+  const metric = metricKey
+    ? `<span class="text-xs font-semibold ${l[metricKey] > 0 ? 'text-emerald-600' : 'text-slate-400'} shrink-0 ml-2">${l[metricKey]} ${metricLabel}</span>`
+    : '';
+  const todosBadge = l.openTodos > 0 ? `<span class="text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded ml-2 shrink-0">${l.openTodos} todo${l.openTodos===1?'':'s'}</span>` : '';
+  return `
+    <button data-action="select-lead" data-id="${l.id}" class="w-full text-left p-2 rounded-md hover:bg-slate-50 transition">
+      <div class="flex items-center justify-between gap-2">
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2">
+            <span class="text-sm font-medium text-slate-900 truncate">${esc(l.name)}</span>
+            ${todosBadge}
+          </div>
+          <div class="text-xs text-slate-500 truncate">${esc(l.stage)}${l.company ? ' · ' + esc(l.company) : ''}</div>
+        </div>
+        ${metric}
+      </div>
+      <div class="flex items-center gap-1 mt-1.5">
+        ${stageDots}
+        <span class="text-[10px] text-slate-400 ml-2">last touched ${fmtRelative(l.lastTouched)}</span>
+      </div>
+    </button>`;
 }
 
 function kpiCardHTML(label, value, color = 'slate') {
@@ -703,6 +812,9 @@ async function deleteLead() {
   const { error } = await sb.from('leads').delete().eq('id', id);
   if (error) return toast(error.message, true);
   state.leads = state.leads.filter(l => l.id !== id);
+  state.allActivity = state.allActivity.filter(a => a.lead_id !== id);
+  state.allTodos = state.allTodos.filter(t => t.lead_id !== id);
+  delete state.lastEventByLead?.[id];
   state.selectedId = null;
   state.editingHeader = false;
   renderSidebar();
@@ -724,13 +836,14 @@ async function onLogSubmit(e) {
     .select().single();
   if (error) return toast(error.message, true);
   state.activity.unshift(data);
+  state.allActivity.unshift(data);
+  computeLastEventCache();
   input.value = '';
   $('#log-when').value = nowLocal();
   const lead = state.leads.find(l => l.id === state.selectedId);
   const stamp = new Date().toISOString();
   if (lead) lead.updated_at = stamp;
   await sb.from('leads').update({ updated_at: stamp }).eq('id', state.selectedId);
-  state.leads.sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
   renderSidebar();
   $('#activity-list').innerHTML = activityHTML();
   toast(new Date(event_at) > new Date() ? 'Scheduled' : 'Logged');
@@ -768,9 +881,12 @@ async function deleteTodo(id) {
 async function deleteActivity(id) {
   if (!confirm('Delete this log entry?')) return;
   state.activity = state.activity.filter(a => a.id !== id);
+  state.allActivity = state.allActivity.filter(a => a.id !== id);
+  computeLastEventCache();
   $('#activity-list').innerHTML = activityHTML();
   const { error } = await sb.from('activity_log').delete().eq('id', id);
   if (error) toast(error.message, true);
+  renderSidebar();
 }
 
 async function onNotesBlur(e) {
