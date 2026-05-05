@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Beulah Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  html, body, #root { height: 100%; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif; }
+  .scrollbar-thin::-webkit-scrollbar { width: 8px; height: 8px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+  textarea { resize: none; }
+  .fade-in { animation: fadeIn .15s ease-out; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-900">
+<div id="root"></div>
+<div id="toast" class="fixed bottom-20 left-1/2 -translate-x-1/2 hidden bg-slate-900 text-white text-sm px-4 py-2 rounded-lg shadow-lg z-50"></div>
+
+<script>
+// ─────────────────────────────────────────────────────────────────────────
+// CONFIG — fill these in after creating your Supabase project.
+// Settings → API → "Project URL" and "anon / public" key.
+// ─────────────────────────────────────────────────────────────────────────
+const SUPABASE_URL      = 'https://ajlmeavwyqksjvuutmnb.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_q6kTC_otM9TSUwT8cjZ57g_-zds04Gw';
+// ─────────────────────────────────────────────────────────────────────────
+
+const STAGES = ['Lead', 'Contacted', 'Proposal', 'Negotiating', 'Signed'];
+const KIND_ICONS = { note: '📝', email: '✉️', call: '📞', meeting: '👥' };
+
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const state = {
+  user: null,
+  leads: [],
+  selectedId: null,
+  activity: [],
+  todos: [],
+  filter: 'all',
+  sort: 'updated',
+  editingHeader: false
+};
+
+// ─── Utilities ───────────────────────────────────────────────────────────
+const $ = (sel) => document.querySelector(sel);
+const root = () => $('#root');
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function stageIndex(stage) { return Math.max(0, STAGES.indexOf(stage)); }
+function fmtDate(iso) {
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+function fmtRelative(iso) {
+  const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return Math.floor(diff/60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff/3600) + 'h ago';
+  if (diff < 604800) return Math.floor(diff/86400) + 'd ago';
+  return new Date(iso).toLocaleDateString();
+}
+function inferKind(body) {
+  const b = body.toLowerCase();
+  if (/\b(email|sent|forward|replied|inbox|reply)\b/.test(b)) return 'email';
+  if (/\b(call|phone|rang|dialed|voicemail|vm)\b/.test(b)) return 'call';
+  if (/\b(meet|meeting|demo|zoom|gmeet|teams|coffee|lunch)\b/.test(b)) return 'meeting';
+  return 'note';
+}
+function toast(msg, isError = false) {
+  const el = $('#toast');
+  el.textContent = msg;
+  el.className = `fixed bottom-20 left-1/2 -translate-x-1/2 text-sm px-4 py-2 rounded-lg shadow-lg z-50 ${isError ? 'bg-red-600' : 'bg-slate-900'} text-white`;
+  el.classList.remove('hidden');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.classList.add('hidden'), 2200);
+}
+
+// ─── Init ────────────────────────────────────────────────────────────────
+async function init() {
+  if (SUPABASE_URL.startsWith('YOUR_') || SUPABASE_ANON_KEY.startsWith('YOUR_')) {
+    renderConfigError();
+    return;
+  }
+  const { data: { session } } = await sb.auth.getSession();
+  state.user = session?.user || null;
+  state.user ? await renderApp() : renderLogin();
+  sb.auth.onAuthStateChange(async (_e, sess) => {
+    state.user = sess?.user || null;
+    state.user ? await renderApp() : renderLogin();
+  });
+}
+
+function renderConfigError() {
+  root().innerHTML = `
+    <div class="h-full flex items-center justify-center p-8">
+      <div class="max-w-lg bg-white border border-amber-300 rounded-xl p-6 shadow-sm">
+        <h1 class="text-xl font-semibold text-amber-800 mb-2">⚙️ Setup needed</h1>
+        <p class="text-slate-700 mb-3">Open <code class="bg-slate-100 px-1.5 py-0.5 rounded">index.html</code> in a text editor and replace these two values near the top:</p>
+        <pre class="bg-slate-100 text-xs p-3 rounded overflow-auto"><code>const SUPABASE_URL      = 'YOUR_SUPABASE_URL';
+const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';</code></pre>
+        <p class="text-slate-600 text-sm mt-3">See <code class="bg-slate-100 px-1 rounded">README.md</code> for the full setup.</p>
+      </div>
+    </div>`;
+}
+
+// ─── Login screen ────────────────────────────────────────────────────────
+function renderLogin() {
+  root().innerHTML = `
+    <div class="h-full flex items-center justify-center bg-gradient-to-br from-slate-50 to-slate-100 p-6">
+      <form id="login-form" class="w-full max-w-sm bg-white p-8 rounded-2xl shadow-sm border border-slate-200 fade-in">
+        <h1 class="text-2xl font-bold text-slate-900 mb-1">Beulah</h1>
+        <p class="text-sm text-slate-500 mb-6">Sales tracking dashboard</p>
+        <label class="block text-xs font-medium text-slate-700 mb-1">Email</label>
+        <input id="login-email" type="email" required autocomplete="email"
+          class="w-full px-3 py-2 mb-3 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-transparent text-sm" />
+        <label class="block text-xs font-medium text-slate-700 mb-1">Password</label>
+        <input id="login-password" type="password" required autocomplete="current-password"
+          class="w-full px-3 py-2 mb-4 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-transparent text-sm" />
+        <button type="submit" class="w-full bg-slate-900 text-white py-2 rounded-lg text-sm font-medium hover:bg-slate-800 transition">Sign in</button>
+        <p id="login-error" class="text-red-600 text-xs mt-3 hidden"></p>
+      </form>
+    </div>`;
+  $('#login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = $('#login-email').value;
+    const password = $('#login-password').value;
+    const btn = e.target.querySelector('button');
+    btn.disabled = true; btn.textContent = 'Signing in…';
+    const { error } = await sb.auth.signInWithPassword({ email, password });
+    if (error) {
+      $('#login-error').textContent = error.message;
+      $('#login-error').classList.remove('hidden');
+      btn.disabled = false; btn.textContent = 'Sign in';
+    }
+  });
+}
+
+// ─── App shell ───────────────────────────────────────────────────────────
+async function renderApp() {
+  root().innerHTML = `
+    <div class="h-full flex flex-col">
+      <header class="h-14 flex items-center justify-between px-6 border-b border-slate-200 bg-white shrink-0">
+        <div class="flex items-center gap-3">
+          <span class="text-xl font-bold">Beulah</span>
+          <span class="text-xs text-slate-400">Sales dashboard</span>
+        </div>
+        <div class="flex items-center gap-3 text-sm">
+          <span class="text-slate-600">${esc(state.user.email)}</span>
+          <button data-action="logout" class="text-slate-500 hover:text-slate-900" title="Sign out">⏻</button>
+        </div>
+      </header>
+      <div class="flex-1 flex overflow-hidden">
+        <aside id="sidebar" class="w-72 border-r border-slate-200 bg-white flex flex-col shrink-0"></aside>
+        <main id="main" class="flex-1 overflow-y-auto scrollbar-thin"></main>
+      </div>
+      <footer class="h-16 border-t border-slate-200 bg-white shrink-0 px-4 flex items-center gap-2">
+        <form id="log-form" class="flex-1 flex items-center gap-2">
+          <span class="text-slate-400 text-lg">💬</span>
+          <input id="log-input" type="text" placeholder="Log progress on the selected lead… e.g. 'forwarded proposal email'"
+            class="flex-1 px-3 py-2 bg-slate-100 border border-transparent focus:bg-white focus:border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-900" />
+          <button type="submit" class="px-4 py-2 bg-slate-900 text-white text-sm font-medium rounded-lg hover:bg-slate-800 transition disabled:opacity-40" disabled>Log</button>
+        </form>
+      </footer>
+    </div>`;
+
+  // Global event delegation
+  document.body.addEventListener('click', onClick);
+  $('#log-form').addEventListener('submit', onLogSubmit);
+  $('#log-input').addEventListener('input', (e) => {
+    $('#log-form button').disabled = !e.target.value.trim() || !state.selectedId;
+  });
+
+  await loadLeads();
+  renderSidebar();
+  renderMain();
+}
+
+// ─── Data loading ────────────────────────────────────────────────────────
+async function loadLeads() {
+  const { data, error } = await sb.from('leads').select('*').order('updated_at', { ascending: false });
+  if (error) return toast(error.message, true);
+  state.leads = data || [];
+}
+
+async function loadLeadDetail(id) {
+  const [a, t] = await Promise.all([
+    sb.from('activity_log').select('*').eq('lead_id', id).order('created_at', { ascending: false }),
+    sb.from('todos').select('*').eq('lead_id', id).order('created_at', { ascending: true })
+  ]);
+  state.activity = a.data || [];
+  state.todos = t.data || [];
+}
+
+// ─── Sidebar ─────────────────────────────────────────────────────────────
+function renderSidebar() {
+  const filtered = state.leads.filter(l => state.filter === 'all' || l.stage === state.filter);
+  const sorted = [...filtered].sort((a, b) => {
+    if (state.sort === 'name') return a.name.localeCompare(b.name);
+    if (state.sort === 'stage') return stageIndex(b.stage) - stageIndex(a.stage);
+    return new Date(b.updated_at) - new Date(a.updated_at);
+  });
+
+  $('#sidebar').innerHTML = `
+    <div class="p-3 border-b border-slate-200 space-y-2">
+      <button data-action="add-lead" class="w-full bg-slate-900 text-white py-2 rounded-lg text-sm font-medium hover:bg-slate-800 transition">+ New lead</button>
+      <div class="flex gap-2">
+        <select data-action="set-filter" class="flex-1 text-xs border border-slate-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-slate-900">
+          <option value="all" ${state.filter==='all'?'selected':''}>All stages</option>
+          ${STAGES.map(s => `<option value="${s}" ${state.filter===s?'selected':''}>${s}</option>`).join('')}
+        </select>
+        <select data-action="set-sort" class="flex-1 text-xs border border-slate-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-slate-900">
+          <option value="updated" ${state.sort==='updated'?'selected':''}>Recent</option>
+          <option value="name" ${state.sort==='name'?'selected':''}>Name</option>
+          <option value="stage" ${state.sort==='stage'?'selected':''}>Stage</option>
+        </select>
+      </div>
+      <div class="text-xs text-slate-400 px-1">${sorted.length} ${sorted.length === 1 ? 'lead' : 'leads'}</div>
+    </div>
+    <div class="flex-1 overflow-y-auto scrollbar-thin">
+      ${sorted.length === 0
+        ? `<div class="p-6 text-center text-sm text-slate-400">${state.leads.length === 0 ? 'No leads yet. Click "+ New lead" to start.' : 'No leads match this filter.'}</div>`
+        : sorted.map(leadCardHTML).join('')}
+    </div>`;
+
+  $('#sidebar').querySelectorAll('select[data-action="set-filter"]')[0]
+    ?.addEventListener('change', (e) => { state.filter = e.target.value; renderSidebar(); });
+  $('#sidebar').querySelectorAll('select[data-action="set-sort"]')[0]
+    ?.addEventListener('change', (e) => { state.sort = e.target.value; renderSidebar(); });
+}
+
+function leadCardHTML(lead) {
+  const idx = stageIndex(lead.stage);
+  const isSel = lead.id === state.selectedId;
+  const segments = STAGES.map((_, i) =>
+    `<span class="h-1 flex-1 rounded-full ${i <= idx ? 'bg-emerald-500' : 'bg-slate-200'}"></span>`
+  ).join('');
+  return `
+    <button data-action="select-lead" data-id="${lead.id}"
+      class="w-full text-left p-3 border-b border-slate-100 transition ${isSel ? 'bg-slate-100' : 'hover:bg-slate-50'}">
+      <div class="flex items-center justify-between mb-1">
+        <span class="font-medium text-sm text-slate-900 truncate">${esc(lead.name)}</span>
+        <span class="text-[10px] text-slate-500 shrink-0 ml-2">${fmtRelative(lead.updated_at)}</span>
+      </div>
+      ${lead.company ? `<div class="text-xs text-slate-500 mb-2 truncate">${esc(lead.company)}</div>` : '<div class="mb-2"></div>'}
+      <div class="flex items-center gap-1.5 mb-1">${segments}</div>
+      <div class="text-[11px] text-slate-500">${esc(lead.stage)} · ${idx + 1}/${STAGES.length}</div>
+    </button>`;
+}
+
+// ─── Main panel ──────────────────────────────────────────────────────────
+function renderMain() {
+  const lead = state.leads.find(l => l.id === state.selectedId);
+  if (!lead) {
+    $('#main').innerHTML = `
+      <div class="h-full flex items-center justify-center text-slate-400 text-sm">
+        ${state.leads.length === 0 ? 'Add a lead to get started →' : 'Select a lead from the sidebar →'}
+      </div>`;
+    return;
+  }
+  const idx = stageIndex(lead.stage);
+  $('#main').innerHTML = `
+    <div class="max-w-5xl mx-auto p-6 fade-in">
+      ${headerHTML(lead)}
+      ${progressHTML(lead, idx)}
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
+        <section class="lg:col-span-2 bg-white rounded-xl border border-slate-200 p-5">
+          <h3 class="text-sm font-semibold text-slate-900 mb-3">Activity</h3>
+          <div id="activity-list">${activityHTML()}</div>
+        </section>
+        <section class="bg-white rounded-xl border border-slate-200 p-5">
+          <h3 class="text-sm font-semibold text-slate-900 mb-3">To do</h3>
+          <form id="todo-form" class="flex gap-2 mb-3">
+            <input id="todo-input" type="text" placeholder="Add a todo…"
+              class="flex-1 px-2.5 py-1.5 text-sm border border-slate-300 rounded-md focus:outline-none focus:ring-1 focus:ring-slate-900" />
+            <button type="submit" class="px-3 py-1.5 bg-slate-900 text-white text-sm rounded-md hover:bg-slate-800">+</button>
+          </form>
+          <div id="todo-list">${todosHTML()}</div>
+        </section>
+        <section class="lg:col-span-3 bg-white rounded-xl border border-slate-200 p-5">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-semibold text-slate-900">Notes</h3>
+            <span id="notes-status" class="text-[11px] text-slate-400"></span>
+          </div>
+          <textarea id="notes" rows="4" placeholder="Free-form notes — what does this lead need before signing?"
+            class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-slate-900 bg-slate-50 focus:bg-white">${esc(lead.notes || '')}</textarea>
+        </section>
+      </div>
+    </div>`;
+
+  $('#todo-form').addEventListener('submit', onTodoSubmit);
+  $('#notes').addEventListener('blur', onNotesBlur);
+  $('#notes').addEventListener('input', () => $('#notes-status').textContent = 'unsaved…');
+  if (state.editingHeader) $('#header-name')?.focus();
+}
+
+function headerHTML(lead) {
+  if (state.editingHeader) {
+    return `
+      <form id="header-form" class="bg-white rounded-xl border border-slate-200 p-5 mb-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <input id="header-name"    name="name"    value="${esc(lead.name)}"    placeholder="Full name"
+          class="px-3 py-2 text-sm border border-slate-300 rounded-md focus:outline-none focus:ring-1 focus:ring-slate-900 sm:col-span-2 font-semibold text-base" required />
+        <input id="header-company" name="company" value="${esc(lead.company || '')}" placeholder="Company"
+          class="px-3 py-2 text-sm border border-slate-300 rounded-md focus:outline-none focus:ring-1 focus:ring-slate-900" />
+        <input id="header-email"   name="email"   value="${esc(lead.email || '')}"   placeholder="Email" type="email"
+          class="px-3 py-2 text-sm border border-slate-300 rounded-md focus:outline-none focus:ring-1 focus:ring-slate-900" />
+        <input id="header-phone"   name="phone"   value="${esc(lead.phone || '')}"   placeholder="Phone"
+          class="px-3 py-2 text-sm border border-slate-300 rounded-md focus:outline-none focus:ring-1 focus:ring-slate-900" />
+        <div class="sm:col-span-2 flex justify-end gap-2 pt-1">
+          <button type="button" data-action="cancel-edit" class="px-3 py-1.5 text-sm text-slate-600 hover:text-slate-900">Cancel</button>
+          <button type="submit" class="px-3 py-1.5 bg-slate-900 text-white text-sm rounded-md hover:bg-slate-800">Save</button>
+          <button type="button" data-action="delete-lead" class="px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 rounded-md ml-auto">Delete lead</button>
+        </div>
+      </form>`;
+  }
+  const contact = [lead.email, lead.phone].filter(Boolean).map(esc).join(' · ');
+  return `
+    <div class="flex items-start justify-between mb-4">
+      <div>
+        <h2 class="text-2xl font-bold text-slate-900">${esc(lead.name)}</h2>
+        ${lead.company ? `<div class="text-slate-600 text-sm mt-0.5">${esc(lead.company)}</div>` : ''}
+        ${contact ? `<div class="text-slate-500 text-xs mt-1">${contact}</div>` : ''}
+      </div>
+      <button data-action="edit-header" class="text-slate-500 hover:text-slate-900 text-sm">✎ Edit</button>
+    </div>`;
+}
+
+function progressHTML(lead, idx) {
+  const segments = STAGES.map((s, i) => {
+    const filled = i <= idx;
+    const isCurrent = i === idx;
+    return `
+      <button data-action="set-stage" data-stage="${s}"
+        class="flex-1 group relative">
+        <div class="h-2 rounded-full transition ${filled ? 'bg-emerald-500' : 'bg-slate-200 group-hover:bg-slate-300'}"></div>
+        <div class="text-[11px] mt-1.5 ${isCurrent ? 'font-semibold text-slate-900' : 'text-slate-500'}">${s}</div>
+      </button>`;
+  }).join('<div class="w-1"></div>');
+  return `
+    <div class="bg-white rounded-xl border border-slate-200 p-5">
+      <div class="flex items-center justify-between mb-3">
+        <span class="text-sm font-semibold text-slate-900">Pipeline progress</span>
+        <span class="text-xs text-slate-500">${idx + 1} of ${STAGES.length}</span>
+      </div>
+      <div class="flex items-start">${segments}</div>
+    </div>`;
+}
+
+function activityHTML() {
+  if (state.activity.length === 0) {
+    return `<div class="text-sm text-slate-400 py-4">No activity yet. Use the bar at the bottom to log progress.</div>`;
+  }
+  return state.activity.map(a => `
+    <div class="flex gap-3 py-2.5 border-b border-slate-100 last:border-0 fade-in">
+      <span class="text-base pt-0.5 shrink-0">${KIND_ICONS[a.kind] || '📝'}</span>
+      <div class="flex-1 min-w-0">
+        <div class="text-sm text-slate-900 break-words">${esc(a.body)}</div>
+        <div class="text-[11px] text-slate-400 mt-0.5">${fmtDate(a.created_at)}</div>
+      </div>
+      <button data-action="delete-activity" data-id="${a.id}" class="text-slate-300 hover:text-red-600 text-xs opacity-0 group-hover:opacity-100" title="Delete">×</button>
+    </div>`).join('');
+}
+
+function todosHTML() {
+  if (state.todos.length === 0) {
+    return `<div class="text-sm text-slate-400 py-2">Nothing to do yet.</div>`;
+  }
+  return state.todos.map(t => `
+    <label class="flex items-start gap-2 py-1.5 group cursor-pointer">
+      <input type="checkbox" data-action="toggle-todo" data-id="${t.id}" ${t.done ? 'checked' : ''}
+        class="mt-0.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
+      <span class="flex-1 text-sm ${t.done ? 'line-through text-slate-400' : 'text-slate-700'} break-words">${esc(t.body)}</span>
+      <button data-action="delete-todo" data-id="${t.id}" class="text-slate-300 hover:text-red-600 text-xs opacity-0 group-hover:opacity-100">×</button>
+    </label>`).join('');
+}
+
+// ─── Actions ─────────────────────────────────────────────────────────────
+async function onClick(e) {
+  const target = e.target.closest('[data-action]');
+  if (!target) return;
+  const action = target.dataset.action;
+  const id = target.dataset.id;
+
+  switch (action) {
+    case 'logout': return sb.auth.signOut();
+    case 'add-lead': return addLead();
+    case 'select-lead': return selectLead(id);
+    case 'edit-header': state.editingHeader = true; renderMain(); return;
+    case 'cancel-edit': state.editingHeader = false; renderMain(); return;
+    case 'set-stage': return setStage(target.dataset.stage);
+    case 'delete-lead': return deleteLead();
+    case 'toggle-todo': return toggleTodo(id, target.checked);
+    case 'delete-todo': return deleteTodo(id);
+    case 'delete-activity': return deleteActivity(id);
+  }
+}
+
+document.body.addEventListener('submit', (e) => {
+  if (e.target.id === 'header-form') { e.preventDefault(); saveHeader(e); }
+});
+
+async function addLead() {
+  const name = prompt('New lead name?');
+  if (!name || !name.trim()) return;
+  const company = prompt('Company (optional)?') || null;
+  const { data, error } = await sb.from('leads')
+    .insert({ name: name.trim(), company: company?.trim() || null, owner_id: state.user.id })
+    .select().single();
+  if (error) return toast(error.message, true);
+  state.leads.unshift(data);
+  await selectLead(data.id);
+}
+
+async function selectLead(id) {
+  state.selectedId = id;
+  state.editingHeader = false;
+  renderSidebar();
+  $('#log-form button').disabled = !$('#log-input').value.trim();
+  await loadLeadDetail(id);
+  renderMain();
+}
+
+async function setStage(stage) {
+  const id = state.selectedId;
+  const now = new Date().toISOString();
+  const { error } = await sb.from('leads').update({ stage, updated_at: now }).eq('id', id);
+  if (error) return toast(error.message, true);
+  const lead = state.leads.find(l => l.id === id);
+  if (lead) { lead.stage = stage; lead.updated_at = now; }
+  state.leads.sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+  renderSidebar();
+  renderMain();
+  toast(`Moved to ${stage}`);
+}
+
+async function saveHeader(e) {
+  e.preventDefault?.();
+  const f = $('#header-form');
+  const payload = {
+    name: f.name.value.trim(),
+    company: f.company.value.trim() || null,
+    email: f.email.value.trim() || null,
+    phone: f.phone.value.trim() || null,
+    updated_at: new Date().toISOString()
+  };
+  if (!payload.name) return toast('Name required', true);
+  const { error } = await sb.from('leads').update(payload).eq('id', state.selectedId);
+  if (error) return toast(error.message, true);
+  const lead = state.leads.find(l => l.id === state.selectedId);
+  Object.assign(lead, payload);
+  state.editingHeader = false;
+  renderSidebar();
+  renderMain();
+}
+
+async function deleteLead() {
+  if (!confirm('Delete this lead and all its activity?')) return;
+  const id = state.selectedId;
+  const { error } = await sb.from('leads').delete().eq('id', id);
+  if (error) return toast(error.message, true);
+  state.leads = state.leads.filter(l => l.id !== id);
+  state.selectedId = null;
+  state.editingHeader = false;
+  renderSidebar();
+  renderMain();
+  toast('Lead deleted');
+}
+
+async function onLogSubmit(e) {
+  e.preventDefault();
+  const input = $('#log-input');
+  const body = input.value.trim();
+  if (!body || !state.selectedId) return;
+  const kind = inferKind(body);
+  const { data, error } = await sb.from('activity_log')
+    .insert({ lead_id: state.selectedId, owner_id: state.user.id, body, kind })
+    .select().single();
+  if (error) return toast(error.message, true);
+  state.activity.unshift(data);
+  input.value = '';
+  $('#log-form button').disabled = true;
+  // Bump lead's updated_at locally
+  const lead = state.leads.find(l => l.id === state.selectedId);
+  if (lead) lead.updated_at = data.created_at;
+  await sb.from('leads').update({ updated_at: data.created_at }).eq('id', state.selectedId);
+  state.leads.sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+  renderSidebar();
+  $('#activity-list').innerHTML = activityHTML();
+}
+
+async function onTodoSubmit(e) {
+  e.preventDefault();
+  const input = $('#todo-input');
+  const body = input.value.trim();
+  if (!body || !state.selectedId) return;
+  const { data, error } = await sb.from('todos')
+    .insert({ lead_id: state.selectedId, owner_id: state.user.id, body })
+    .select().single();
+  if (error) return toast(error.message, true);
+  state.todos.push(data);
+  input.value = '';
+  $('#todo-list').innerHTML = todosHTML();
+}
+
+async function toggleTodo(id, done) {
+  const t = state.todos.find(t => t.id === id);
+  if (t) t.done = done;
+  $('#todo-list').innerHTML = todosHTML();
+  const { error } = await sb.from('todos').update({ done }).eq('id', id);
+  if (error) toast(error.message, true);
+}
+
+async function deleteTodo(id) {
+  state.todos = state.todos.filter(t => t.id !== id);
+  $('#todo-list').innerHTML = todosHTML();
+  const { error } = await sb.from('todos').delete().eq('id', id);
+  if (error) toast(error.message, true);
+}
+
+async function deleteActivity(id) {
+  if (!confirm('Delete this log entry?')) return;
+  state.activity = state.activity.filter(a => a.id !== id);
+  $('#activity-list').innerHTML = activityHTML();
+  const { error } = await sb.from('activity_log').delete().eq('id', id);
+  if (error) toast(error.message, true);
+}
+
+async function onNotesBlur(e) {
+  const notes = e.target.value;
+  const { error } = await sb.from('leads').update({ notes }).eq('id', state.selectedId);
+  if (error) { toast(error.message, true); return; }
+  const lead = state.leads.find(l => l.id === state.selectedId);
+  if (lead) lead.notes = notes;
+  $('#notes-status').textContent = 'saved';
+  setTimeout(() => { if ($('#notes-status')) $('#notes-status').textContent = ''; }, 1500);
+}
+
+// Boot
+init();
+</script>
+</body>
+</html>
