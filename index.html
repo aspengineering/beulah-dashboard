@@ -743,10 +743,27 @@ async function onClick(e) {
 }
 
 async function toggleTodoOverview(id, done) {
+  const todo = state.allTodos.find(t => t.id === id);
   const { error } = await sb.from('todos').update({ done }).eq('id', id);
   if (error) return toast(error.message, true);
   state.allTodos = state.allTodos.filter(t => t.id !== id);
+  if (done && todo) await logTodoCompletion(todo);
   renderOverview();
+}
+
+async function logTodoCompletion(todo) {
+  const row = {
+    lead_id: todo.lead_id,
+    owner_id: state.user.id,
+    kind: 'note',
+    body: 'Done: ' + todo.body,
+    event_at: new Date().toISOString(),
+  };
+  const { data, error } = await sb.from('activity_log').insert(row).select().single();
+  if (error) { toast(error.message, true); return; }
+  state.allActivity.unshift(data);
+  if (state.selectedId === todo.lead_id) state.activity.unshift(data);
+  computeLastEventCache();
 }
 
 document.body.addEventListener('submit', (e) => {
@@ -868,7 +885,12 @@ async function toggleTodo(id, done) {
   if (t) t.done = done;
   $('#todo-list').innerHTML = todosHTML();
   const { error } = await sb.from('todos').update({ done }).eq('id', id);
-  if (error) toast(error.message, true);
+  if (error) return toast(error.message, true);
+  if (done && t) {
+    await logTodoCompletion(t);
+    if ($('#activity-list')) $('#activity-list').innerHTML = activityHTML();
+    renderSidebar();
+  }
 }
 
 async function deleteTodo(id) {
