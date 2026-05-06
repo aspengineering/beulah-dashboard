@@ -82,3 +82,38 @@ create policy "team todos" on todos
 --   for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
 -- create policy "own todos" on todos
 --   for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
+
+-- Profiles: a public-readable mirror of auth.users so the dashboard can show
+-- "by Adam" / "by Sarah" badges next to leads, activities and todos.
+create table if not exists profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  email text,
+  display_name text,
+  updated_at timestamptz default now()
+);
+
+alter table profiles enable row level security;
+drop policy if exists "team profiles" on profiles;
+create policy "team profiles" on profiles
+  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+
+-- Trigger keeps profiles in sync with auth.users (insert + email change).
+create or replace function handle_new_user() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  insert into profiles (id, email, display_name)
+  values (new.id, new.email, split_part(new.email, '@', 1))
+  on conflict (id) do update set email = excluded.email;
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert or update of email on auth.users
+  for each row execute function handle_new_user();
+
+-- Backfill rows for users who already exist before this trigger was added.
+insert into profiles (id, email, display_name)
+select id, email, split_part(email, '@', 1) from auth.users
+on conflict (id) do nothing;

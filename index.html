@@ -48,7 +48,8 @@ const state = {
   allActivity: [],
   allTodos: [],
   masterTodos: [],
-  contactMap: {}
+  contactMap: {},
+  profiles: {}
 };
 
 // ─── Utilities ───────────────────────────────────────────────────────────
@@ -88,6 +89,19 @@ function fmtRelative(iso) {
   if (diff < 86400) return Math.floor(diff/3600) + 'h ago';
   if (diff < 604800) return Math.floor(diff/86400) + 'd ago';
   return new Date(iso).toLocaleDateString();
+}
+function actorName(userId) {
+  if (!userId) return '';
+  const p = state.profiles[userId];
+  if (!p) return '';
+  if (p.display_name) return p.display_name;
+  if (p.email) return p.email.split('@')[0];
+  return '';
+}
+function byBadge(userId, prefix = 'by') {
+  const name = actorName(userId);
+  if (!name) return '';
+  return `<span class="text-[10px] text-slate-400 ml-1 font-normal">${prefix} ${esc(name)}</span>`;
 }
 function inferKind(body) {
   const b = body.toLowerCase();
@@ -169,30 +183,37 @@ function renderLogin() {
 async function renderApp() {
   root().innerHTML = `
     <div class="h-full flex flex-col">
-      <header class="h-14 flex items-center justify-between px-6 border-b border-slate-200 bg-white shrink-0">
-        <button data-action="go-home" class="flex items-center gap-3 hover:opacity-80 transition" title="Overview">
-          <span class="text-xl font-bold">Beulah</span>
-          <span class="text-xs text-slate-400 hidden sm:inline">Sales dashboard</span>
-        </button>
-        <div class="flex items-center gap-2 text-sm">
-          <button data-action="go-home" class="text-slate-700 hover:text-slate-900 text-xs px-2.5 py-1.5 border border-slate-300 rounded-md hover:bg-slate-50">Overview</button>
-          <span class="text-slate-600 hidden sm:inline text-xs">${esc(state.user.email)}</span>
-          <button data-action="logout" class="text-slate-600 hover:text-slate-900 text-xs px-2.5 py-1.5 border border-slate-300 rounded-md hover:bg-slate-50">Sign out</button>
+      <header class="h-14 flex items-center justify-between px-3 sm:px-6 border-b border-slate-200 bg-white shrink-0 gap-2">
+        <div class="flex items-center gap-2 min-w-0">
+          <button data-action="toggle-sidebar" class="lg:hidden p-2 -ml-2 rounded-md hover:bg-slate-100" title="Show leads" aria-label="Toggle sidebar">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+          </button>
+          <button data-action="go-home" class="flex items-center gap-2 hover:opacity-80 transition min-w-0" title="Overview">
+            <span class="text-lg sm:text-xl font-bold">Beulah</span>
+            <span class="text-xs text-slate-400 hidden sm:inline">Sales dashboard</span>
+          </button>
+        </div>
+        <div class="flex items-center gap-1.5 sm:gap-2 text-sm shrink-0">
+          <button data-action="go-home" class="text-slate-700 hover:text-slate-900 text-xs px-2 sm:px-2.5 py-1.5 border border-slate-300 rounded-md hover:bg-slate-50">Overview</button>
+          <span class="text-slate-600 hidden md:inline text-xs">${esc(state.user.email)}</span>
+          <button data-action="logout" class="text-slate-600 hover:text-slate-900 text-xs px-2 sm:px-2.5 py-1.5 border border-slate-300 rounded-md hover:bg-slate-50">Sign out</button>
         </div>
       </header>
-      <div class="flex-1 flex overflow-hidden">
-        <aside id="sidebar" class="w-72 border-r border-slate-200 bg-white flex flex-col shrink-0"></aside>
+      <div class="flex-1 flex overflow-hidden relative">
+        <div id="sidebar-backdrop" class="hidden lg:hidden fixed inset-0 top-14 bg-slate-900/30 z-30" data-action="toggle-sidebar"></div>
+        <aside id="sidebar" class="w-72 border-r border-slate-200 bg-white flex flex-col shrink-0 transition-transform duration-200
+          fixed lg:relative top-14 lg:top-0 bottom-0 left-0 z-40 -translate-x-full lg:translate-x-0"></aside>
         <main id="main" class="flex-1 overflow-y-auto scrollbar-thin"></main>
       </div>
-      <footer class="border-t border-slate-200 bg-white shrink-0 px-3 py-2 flex items-center gap-2">
-        <form id="log-form" class="flex-1 flex items-center gap-2 flex-wrap sm:flex-nowrap">
-          <input id="log-input" type="text" placeholder="Type or dictate… e.g. 'spoke with Duncan at MotorEasy, demo went well' — auto-routes to the right lead"
+      <footer class="border-t border-slate-200 bg-white shrink-0 px-2 sm:px-3 py-2">
+        <form id="log-form" class="flex items-center gap-1.5 sm:gap-2">
+          <input id="log-input" type="text" placeholder="Log progress… auto-routes by lead name"
             class="flex-1 min-w-0 px-3 py-2 bg-slate-100 border border-transparent focus:bg-white focus:border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-900" />
-          <button type="button" id="log-mic" data-action="mic-toggle" title="Voice dictation"
-            class="px-3 py-2 border border-slate-300 rounded-md hover:bg-slate-50 text-sm font-semibold shrink-0">Mic</button>
+          <button type="button" id="log-mic" data-action="mic-toggle" title="Voice dictation" aria-label="Voice"
+            class="px-2.5 sm:px-3 py-2 border border-slate-300 rounded-md hover:bg-slate-50 text-sm font-semibold shrink-0">Mic</button>
           <input id="log-when" type="datetime-local"
-            class="text-xs px-2 py-2 border border-slate-200 rounded-md bg-white" title="When did/will this happen? Past = logged. Future = upcoming." />
-          <button type="submit" class="px-4 py-2 bg-slate-900 text-white text-sm font-medium rounded-lg hover:bg-slate-800 transition shrink-0">Log</button>
+            class="hidden sm:block text-xs px-2 py-2 border border-slate-200 rounded-md bg-white" title="When did/will this happen? Past = logged. Future = upcoming." />
+          <button type="submit" class="px-3 sm:px-4 py-2 bg-slate-900 text-white text-sm font-medium rounded-lg hover:bg-slate-800 transition shrink-0">Log</button>
         </form>
       </footer>
     </div>`;
@@ -222,17 +243,20 @@ function leadLastTouched(lead) {
 }
 
 async function loadLeadsAndActivity() {
-  const [leadsRes, actRes, todosRes, masterRes] = await Promise.all([
+  const [leadsRes, actRes, todosRes, masterRes, profRes] = await Promise.all([
     sb.from('leads').select('*').order('updated_at', { ascending: false }),
-    sb.from('activity_log').select('id, lead_id, kind, body, event_at, created_at').order('event_at', { ascending: false }).limit(2000),
+    sb.from('activity_log').select('id, lead_id, owner_id, kind, body, event_at, created_at').order('event_at', { ascending: false }).limit(2000),
     sb.from('todos').select('*').eq('done', false).not('lead_id', 'is', null).order('created_at', { ascending: true }).limit(500),
-    sb.from('todos').select('*').is('lead_id', null).order('created_at', { ascending: true })
+    sb.from('todos').select('*').is('lead_id', null).order('created_at', { ascending: true }),
+    sb.from('profiles').select('id, email, display_name')
   ]);
   if (leadsRes.error) toast(leadsRes.error.message, true);
   state.leads = leadsRes.data || [];
   state.allActivity = actRes.data || [];
   state.allTodos = todosRes.data || [];
   state.masterTodos = masterRes.data || [];
+  state.profiles = {};
+  (profRes.data || []).forEach(p => { state.profiles[p.id] = p; });
   computeLastEventCache();
   buildContactMap();
 }
@@ -311,7 +335,10 @@ function leadCardHTML(lead) {
       </div>
       ${lead.company ? `<div class="text-xs text-slate-500 mb-2 truncate">${esc(lead.company)}</div>` : '<div class="mb-2"></div>'}
       <div class="flex items-center gap-1.5 mb-1">${segments}</div>
-      <div class="text-[11px] text-slate-500">${esc(lead.stage)} · ${idx + 1}/${STAGES.length}</div>
+      <div class="flex items-center justify-between gap-2">
+        <span class="text-[11px] text-slate-500 truncate">${esc(lead.stage)} · ${idx + 1}/${STAGES.length}</span>
+        ${actorName(lead.owner_id) ? `<span class="text-[10px] text-slate-400 shrink-0">${esc(actorName(lead.owner_id))}</span>` : ''}
+      </div>
     </button>`;
 }
 
@@ -325,10 +352,10 @@ function renderMain() {
   }
   const idx = stageIndex(lead.stage);
   $('#main').innerHTML = `
-    <div class="max-w-5xl mx-auto p-6 fade-in">
+    <div class="max-w-5xl mx-auto p-3 sm:p-6 fade-in">
       ${headerHTML(lead)}
       ${progressHTML(lead, idx)}
-      <section class="bg-amber-50 rounded-xl border-2 border-amber-300 p-5 mt-6 shadow-sm">
+      <section class="bg-amber-50 rounded-xl border-2 border-amber-300 p-4 sm:p-5 mt-6 shadow-sm">
         <div class="flex items-center justify-between mb-3 gap-3">
           <h3 class="text-base font-bold text-slate-900">To do <span class="text-amber-700">· ${state.todos.filter(t=>!t.done).length} open</span></h3>
         </div>
@@ -342,11 +369,11 @@ function renderMain() {
         <div id="todo-list">${todosHTML()}</div>
       </section>
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
-        <section class="lg:col-span-3 bg-white rounded-xl border border-slate-200 p-5">
+        <section class="lg:col-span-3 bg-white rounded-xl border border-slate-200 p-4 sm:p-5">
           <h3 class="text-sm font-semibold text-slate-900 mb-3">Activity</h3>
           <div id="activity-list">${activityHTML()}</div>
         </section>
-        <section class="lg:col-span-3 bg-white rounded-xl border border-slate-200 p-5">
+        <section class="lg:col-span-3 bg-white rounded-xl border border-slate-200 p-4 sm:p-5">
           <div class="flex items-center justify-between mb-2">
             <h3 class="text-sm font-semibold text-slate-900">Notes</h3>
             <span id="notes-status" class="text-[11px] text-slate-400"></span>
@@ -366,7 +393,7 @@ function renderMain() {
 function headerHTML(lead) {
   if (state.editingHeader) {
     return `
-      <form id="header-form" class="bg-white rounded-xl border border-slate-200 p-5 mb-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <form id="header-form" class="bg-white rounded-xl border border-slate-200 p-4 sm:p-5 mb-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
         <input id="header-name"    name="name"    value="${esc(lead.name)}"    placeholder="Full name"
           class="px-3 py-2 text-sm border border-slate-300 rounded-md focus:outline-none focus:ring-1 focus:ring-slate-900 sm:col-span-2 font-semibold text-base" required />
         <input id="header-company" name="company" value="${esc(lead.company || '')}" placeholder="Company"
@@ -407,7 +434,7 @@ function progressHTML(lead, idx) {
   }).join('<div class="w-1"></div>');
   const nextStage = STAGES[idx + 1];
   return `
-    <div class="bg-white rounded-xl border border-slate-200 p-5">
+    <div class="bg-white rounded-xl border border-slate-200 p-4 sm:p-5">
       <div class="flex items-center justify-between mb-3 gap-3 flex-wrap">
         <span class="text-sm font-semibold text-slate-900">Pipeline progress · ${idx + 1} of ${STAGES.length}</span>
         ${nextStage
@@ -443,12 +470,13 @@ function activityHTML() {
 }
 
 function activityItemHTML(a, isFuture) {
+  const who = actorName(a.owner_id);
   return `
     <div class="flex gap-3 py-2.5 border-b border-slate-100 last:border-0 fade-in group ${isFuture ? 'bg-blue-50/40 -mx-2 px-2 rounded-md' : ''}">
       <span class="text-[10px] uppercase tracking-wide font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded shrink-0 mt-0.5 h-5">${KIND_LABELS[a.kind] || 'Note'}</span>
       <div class="flex-1 min-w-0">
         <div class="text-sm ${isFuture ? 'text-slate-800' : 'text-slate-900'} break-words">${esc(a.body)}</div>
-        <div class="text-[11px] ${isFuture ? 'text-blue-600 font-medium' : 'text-slate-400'} mt-0.5">${fmtDate(a.event_at)}</div>
+        <div class="text-[11px] ${isFuture ? 'text-blue-600 font-medium' : 'text-slate-400'} mt-0.5">${fmtDate(a.event_at)}${who ? ' · by ' + esc(who) : ''}</div>
       </div>
       <button data-action="delete-activity" data-id="${a.id}" class="text-slate-300 hover:text-red-600 text-xs px-1" title="Delete">×</button>
     </div>`;
@@ -480,7 +508,7 @@ function todosHTML() {
       <input type="checkbox" data-action="toggle-todo" data-id="${t.id}" ${t.done ? 'checked' : ''}
         class="mt-0.5 w-4 h-4 rounded border-amber-400 text-emerald-600 focus:ring-emerald-500" />
       <span class="flex-1 text-sm font-medium ${t.done ? 'line-through text-slate-400' : 'text-slate-900'} break-words">
-        ${esc(t.body)}${dueBadgeHTML(t, overdue)}
+        ${esc(t.body)}${dueBadgeHTML(t, overdue)}${byBadge(t.owner_id)}
       </span>
       <button data-action="delete-todo" data-id="${t.id}" class="text-slate-400 hover:text-red-600 text-xs opacity-0 group-hover:opacity-100">×</button>
     </label>`;
@@ -502,13 +530,13 @@ function masterTodosHTML() {
       <input type="checkbox" data-action="toggle-master-todo" data-id="${t.id}" ${t.done ? 'checked' : ''}
         class="mt-0.5 w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
       <span class="flex-1 text-sm font-medium ${t.done ? 'line-through text-slate-400' : 'text-slate-900'} break-words">
-        ${esc(t.body)}${dueBadgeHTML(t, overdue)}
+        ${esc(t.body)}${dueBadgeHTML(t, overdue)}${byBadge(t.owner_id)}
       </span>
       <button data-action="delete-master-todo" data-id="${t.id}" class="text-slate-300 hover:text-red-600 text-xs opacity-0 group-hover:opacity-100">×</button>
     </label>`;
   };
   return `
-    <section class="bg-white rounded-xl border border-slate-200 p-5 mb-5">
+    <section class="bg-white rounded-xl border border-slate-200 p-4 sm:p-5 mb-5">
       <div class="flex items-center justify-between mb-3 gap-3 flex-wrap">
         <h3 class="text-base font-semibold text-slate-900">Master tasks</h3>
         <span class="text-xs ${overdueCount > 0 ? 'text-red-600 font-bold' : 'text-slate-500'}">${overdueCount > 0 ? overdueCount + ' overdue · ' : ''}${open.length} open${done.length ? ` · ${done.length} done` : ''}</span>
@@ -624,7 +652,7 @@ async function renderOverview() {
   });
 
   $('#main').innerHTML = `
-    <div class="max-w-7xl mx-auto p-4 sm:p-6 fade-in">
+    <div class="max-w-7xl mx-auto p-3 sm:p-6 fade-in">
       <div class="flex items-baseline justify-between mb-5 gap-3 flex-wrap">
         <div>
           <h2 class="text-2xl font-bold text-slate-900">Overview</h2>
@@ -644,7 +672,7 @@ async function renderOverview() {
       </div>
 
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-5">
-        <section class="lg:col-span-2 bg-white rounded-xl border border-slate-200 p-5">
+        <section class="lg:col-span-2 bg-white rounded-xl border border-slate-200 p-4 sm:p-5">
           <div class="flex items-baseline justify-between mb-4">
             <h3 class="text-sm font-semibold text-slate-900">Pipeline distribution</h3>
             <span class="text-[11px] text-slate-400">Tap a bar to filter</span>
@@ -669,7 +697,7 @@ async function renderOverview() {
           </div>
         </section>
 
-        <section class="bg-white rounded-xl border border-slate-200 p-5">
+        <section class="bg-white rounded-xl border border-slate-200 p-4 sm:p-5">
           <div class="flex items-baseline justify-between mb-3">
             <h3 class="text-sm font-semibold text-slate-900">Activity · last 14 days</h3>
             <span class="text-[11px] text-slate-500 font-medium">${totalLogs} logs</span>
@@ -697,24 +725,25 @@ async function renderOverview() {
       </div>
 
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-5">
-        <section class="lg:col-span-2 bg-white rounded-xl border border-slate-200 p-5">
+        <section class="lg:col-span-2 bg-white rounded-xl border border-slate-200 p-4 sm:p-5">
           <h3 class="text-sm font-semibold text-slate-900 mb-3">Upcoming scheduled · ${upcoming.length}</h3>
           ${upcoming.length === 0
             ? `<div class="text-xs text-slate-400">Nothing scheduled. Open a lead and use the bottom log bar with a future date to plan ahead.</div>`
             : `<div class="space-y-1">${upcoming.slice(0, 10).map(a => {
                 const lead = state.leads.find(l => l.id === a.lead_id);
+                const who = actorName(a.owner_id);
                 return `
                   <button data-action="select-lead" data-id="${a.lead_id}" class="w-full text-left flex gap-3 py-2 px-2 rounded-md hover:bg-slate-50 transition">
                     <span class="text-[10px] uppercase tracking-wide font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded shrink-0 mt-0.5 h-5">${KIND_LABELS[a.kind] || 'Note'}</span>
                     <div class="flex-1 min-w-0">
                       <div class="text-sm text-slate-900 truncate">${esc(a.body)}</div>
-                      <div class="text-[11px] text-blue-600 font-medium mt-0.5">${fmtDate(a.event_at)}${lead ? ' · ' + esc(lead.name) : ''}</div>
+                      <div class="text-[11px] text-blue-600 font-medium mt-0.5">${fmtDate(a.event_at)}${lead ? ' · ' + esc(lead.name) : ''}${who ? ' · by ' + esc(who) : ''}</div>
                     </div>
                   </button>`;
               }).join('')}</div>`}
         </section>
 
-        <section class="bg-white rounded-xl border border-slate-200 p-5">
+        <section class="bg-white rounded-xl border border-slate-200 p-4 sm:p-5">
           <h3 class="text-sm font-semibold text-slate-900 mb-3">Recent wins · last 30 days</h3>
           ${recentWins.length === 0
             ? `<div class="text-xs text-slate-400">No deals signed in the last 30 days.</div>`
@@ -726,24 +755,25 @@ async function renderOverview() {
         </section>
       </div>
 
-      <section class="bg-white rounded-xl border border-slate-200 p-5 mb-5">
+      <section class="bg-white rounded-xl border border-slate-200 p-4 sm:p-5 mb-5">
         <h3 class="text-sm font-semibold text-slate-900 mb-3">Recent activity · across all leads</h3>
         ${recentActivity.length === 0
           ? `<div class="text-xs text-slate-400">No activity logged yet.</div>`
           : `<div class="space-y-0.5">${recentActivity.map(a => {
               const lead = state.leads.find(l => l.id === a.lead_id);
+              const who = actorName(a.owner_id);
               return `
                 <button data-action="select-lead" data-id="${a.lead_id}" class="w-full text-left flex gap-3 py-2 px-2 rounded-md hover:bg-slate-50 transition">
                   <span class="text-[10px] uppercase tracking-wide font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded shrink-0 mt-0.5 h-5">${KIND_LABELS[a.kind] || 'Note'}</span>
                   <div class="flex-1 min-w-0">
                     <div class="text-sm text-slate-900 truncate">${esc(a.body)}</div>
-                    <div class="text-[11px] text-slate-400 mt-0.5">${fmtDate(a.event_at)}${lead ? ' · ' + esc(lead.name) : ''}</div>
+                    <div class="text-[11px] text-slate-400 mt-0.5">${fmtDate(a.event_at)}${lead ? ' · ' + esc(lead.name) : ''}${who ? ' · by ' + esc(who) : ''}</div>
                   </div>
                 </button>`;
             }).join('')}</div>`}
       </section>
 
-      <section class="bg-white rounded-xl border border-slate-200 p-5">
+      <section class="bg-white rounded-xl border border-slate-200 p-4 sm:p-5">
         <h3 class="text-sm font-semibold text-slate-900 mb-3">Open todos · ${state.allTodos.length}</h3>
         ${state.allTodos.length === 0
           ? `<div class="text-xs text-slate-400">No open todos. You're caught up.</div>`
@@ -757,7 +787,7 @@ async function renderOverview() {
                     ${todos.map(t => `
                       <div class="flex items-start gap-2 py-1">
                         <input type="checkbox" data-action="toggle-todo-overview" data-id="${t.id}" class="mt-0.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
-                        <span class="text-sm text-slate-700 break-words">${esc(t.body)}</span>
+                        <span class="text-sm text-slate-700 break-words">${esc(t.body)}${byBadge(t.owner_id)}</span>
                       </div>`).join('')}
                   </div>`;
               }).join('')}
@@ -768,7 +798,7 @@ async function renderOverview() {
 
 function leadListSectionHTML(title, subtitle, leads, metricKey, metricLabel, emptyText) {
   return `
-    <section class="bg-white rounded-xl border border-slate-200 p-5">
+    <section class="bg-white rounded-xl border border-slate-200 p-4 sm:p-5">
       <h3 class="text-sm font-semibold text-slate-900">${title}</h3>
       <p class="text-[11px] text-slate-400 mb-3">${subtitle}</p>
       ${leads.length === 0
@@ -823,7 +853,7 @@ async function onClick(e) {
     case 'logout': return sb.auth.signOut();
     case 'add-lead': return addLead();
     case 'select-lead': return selectLead(id);
-    case 'go-home': state.selectedId = null; renderSidebar(); renderMain(); return;
+    case 'go-home': state.selectedId = null; renderSidebar(); renderMain(); if (window.matchMedia('(max-width: 1023px)').matches) toggleSidebar(true); return;
     case 'filter-stage':
       state.filter = target.dataset.stage;
       state.selectedId = null;
@@ -841,6 +871,22 @@ async function onClick(e) {
     case 'delete-master-todo': return deleteMasterTodo(id);
     case 'delete-activity': return deleteActivity(id);
     case 'mic-toggle': return toggleDictation();
+    case 'toggle-sidebar': return toggleSidebar();
+  }
+}
+
+function toggleSidebar(forceClose = false) {
+  const sb = $('#sidebar');
+  const bd = $('#sidebar-backdrop');
+  if (!sb) return;
+  const isOpen = !sb.classList.contains('-translate-x-full');
+  const open = forceClose ? false : !isOpen;
+  if (open) {
+    sb.classList.remove('-translate-x-full');
+    bd?.classList.remove('hidden');
+  } else {
+    sb.classList.add('-translate-x-full');
+    bd?.classList.add('hidden');
   }
 }
 
@@ -985,6 +1031,7 @@ async function selectLead(id) {
   renderSidebar();
   await loadLeadDetail(id);
   renderMain();
+  if (window.matchMedia('(max-width: 1023px)').matches) toggleSidebar(true);
 }
 
 async function setStage(stage) {
