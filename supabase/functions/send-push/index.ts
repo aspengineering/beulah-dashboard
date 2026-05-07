@@ -72,8 +72,7 @@ Deno.serve(async (req) => {
 
   const { data: subs } = await supabase
     .from("push_subscriptions")
-    .select("id, endpoint, p256dh, auth")
-    .neq("user_id", payload.actor_id);
+    .select("id, endpoint, p256dh, auth");
 
   const message = JSON.stringify({ title, body, url: APP_URL, tag: payload.todo_id });
 
