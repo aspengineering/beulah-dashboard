@@ -151,3 +151,65 @@ create trigger on_auth_user_created
 insert into profiles (id, email, display_name)
 select id, email, split_part(email, '@', 1) from auth.users
 on conflict (id) do nothing;
+
+-- Push subscriptions: one row per (user, browser/device).
+create table if not exists push_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users(id) on delete cascade not null,
+  endpoint text not null unique,
+  p256dh text not null,
+  auth text not null,
+  user_agent text,
+  created_at timestamptz default now()
+);
+
+alter table push_subscriptions enable row level security;
+drop policy if exists "team subs" on push_subscriptions;
+create policy "team subs" on push_subscriptions
+  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+
+-- Trigger: when a todo is inserted or marked done, fire the send-push edge function.
+-- pg_net runs HTTP calls asynchronously from Postgres.
+create extension if not exists pg_net;
+
+-- IMPORTANT: replace WEBHOOK_SECRET_PLACEHOLDER below with the random secret you
+-- also store in the Edge Function's WEBHOOK_SECRET env var. They must match.
+create or replace function notify_todo_change() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare payload jsonb;
+begin
+  if (TG_OP = 'INSERT') then
+    payload := jsonb_build_object(
+      'event', case when NEW.lead_id is null then 'master_added' else 'task_added' end,
+      'todo_id', NEW.id,
+      'lead_id', NEW.lead_id,
+      'body', NEW.body,
+      'actor_id', NEW.owner_id
+    );
+  elsif (TG_OP = 'UPDATE' and OLD.done = false and NEW.done = true) then
+    payload := jsonb_build_object(
+      'event', 'task_done',
+      'todo_id', NEW.id,
+      'lead_id', NEW.lead_id,
+      'body', NEW.body,
+      'actor_id', NEW.owner_id
+    );
+  else
+    return NEW;
+  end if;
+  perform net.http_post(
+    url := 'https://ajlmeavwyqksjvuutmnb.supabase.co/functions/v1/send-push',
+    body := payload,
+    headers := jsonb_build_object(
+      'Content-Type', 'application/json',
+      'X-Webhook-Secret', 'WEBHOOK_SECRET_PLACEHOLDER'
+    )
+  );
+  return NEW;
+end;
+$$;
+
+drop trigger if exists todo_push_trigger on todos;
+create trigger todo_push_trigger
+  after insert or update on todos
+  for each row execute function notify_todo_change();
