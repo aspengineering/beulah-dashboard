@@ -624,7 +624,7 @@ function masterTodosHTML() {
     if (state.editingMasterId === t.id) {
       const dueVal = t.due_at ? new Date(t.due_at).toISOString().slice(0, 10) : '';
       return `
-      <form data-form-action="save-master-edit" data-id="${t.id}" class="py-2 -mx-2 px-3 my-1 bg-slate-50 rounded-md border border-slate-200 space-y-2">
+      <form data-form-action="save-master-edit" data-id="${t.id}" class="py-3 -mx-2 px-3 my-1 bg-slate-50 rounded-md border border-slate-200 space-y-2">
         <div class="flex gap-2 flex-wrap sm:flex-nowrap">
           <input name="body" value="${esc(t.body)}" required autofocus placeholder="Task title"
             class="flex-1 min-w-0 px-2 py-1.5 text-sm border border-slate-300 rounded-md focus:outline-none focus:ring-1 focus:ring-slate-900" />
@@ -638,17 +638,24 @@ function masterTodosHTML() {
           ${attached.map(a => `
             <span class="inline-flex items-center gap-1 text-[11px] bg-white border border-slate-200 px-2 py-1 rounded">
               <span>${fileIcon(a.mime)}</span>
-              <button type="button" data-action="open-file" data-id="${a.id}" class="text-slate-700 hover:text-slate-900 max-w-[200px] truncate">${esc(a.name)}</button>
+              <button type="button" data-action="open-file" data-id="${a.id}" class="text-slate-700 hover:text-slate-900 max-w-[180px] truncate">${esc(a.name)}</button>
               <button type="button" data-action="delete-attachment" data-id="${a.id}" class="text-slate-400 hover:text-red-600 ml-1">×</button>
             </span>`).join('')}
         </div>` : ''}
         <label class="flex items-center gap-2 text-xs text-slate-500 cursor-pointer">
           <span class="inline-block px-2 py-1 bg-white border border-slate-300 rounded hover:bg-slate-50">📎 Attach files</span>
           <input name="files" type="file" multiple class="hidden" />
-          <span data-files-label class="text-slate-400">No new files selected</span>
+          <span data-files-label class="text-slate-400 truncate">No new files selected</span>
         </label>
-        <div class="flex justify-end gap-2">
-          <button type="button" data-action="cancel-master-edit" class="text-xs text-slate-500 hover:text-slate-700 px-2">Cancel</button>
+        <div class="flex flex-wrap items-center gap-2 pt-1">
+          <button type="button" data-action="move-master-up" data-id="${t.id}" ${isFirst ? 'disabled' : ''}
+            class="px-2 py-1 text-xs border border-slate-300 rounded-md hover:bg-white disabled:text-slate-300 disabled:border-slate-200">↑ Up</button>
+          <button type="button" data-action="move-master-down" data-id="${t.id}" ${isLast ? 'disabled' : ''}
+            class="px-2 py-1 text-xs border border-slate-300 rounded-md hover:bg-white disabled:text-slate-300 disabled:border-slate-200">↓ Down</button>
+          <button type="button" data-action="delete-master-todo" data-id="${t.id}"
+            class="px-2 py-1 text-xs text-red-600 border border-red-200 rounded-md hover:bg-red-50">Delete</button>
+          <div class="flex-1"></div>
+          <button type="button" data-action="cancel-master-edit" class="text-xs text-slate-500 hover:text-slate-700 px-2 py-1">Cancel</button>
           <button type="submit" class="px-3 py-1.5 bg-slate-900 text-white text-sm rounded-md hover:bg-slate-800">Save</button>
         </div>
       </form>`;
@@ -657,11 +664,11 @@ function masterTodosHTML() {
     const owner = actorName(t.owner_id);
     const overdueLabel = due?.overdue ? `<span class="text-xs font-bold text-red-600 ml-1.5 whitespace-nowrap">${esc(due.text)}</span>` : '';
     return `
-    <div class="flex items-start gap-3 py-2 group">
+    <div class="flex items-start gap-2 sm:gap-3 py-2">
       <input type="checkbox" data-action="toggle-master-todo" data-id="${t.id}"
         class="mt-1 w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 shrink-0 cursor-pointer" />
       ${numbered ? `<span class="text-xs font-bold text-slate-300 mt-1 shrink-0 w-4 text-right tabular-nums">${idx+1}</span>` : ''}
-      <div class="flex-1 min-w-0">
+      <div data-action="edit-master-todo" data-id="${t.id}" class="flex-1 min-w-0 cursor-pointer hover:opacity-80 active:opacity-60 transition" title="Tap to edit / attach files">
         <div class="text-sm text-slate-900 break-words leading-snug pt-0.5">
           ${esc(t.body)}${overdueLabel}
         </div>
@@ -669,18 +676,12 @@ function masterTodosHTML() {
         ${attached.length ? `<div class="flex flex-wrap gap-1 mt-1.5">
           ${attached.map(a => `
             <button data-action="open-file" data-id="${a.id}" title="${esc(a.name)} — ${fmtFileSize(a.size)}"
-              class="inline-flex items-center gap-1 text-[11px] bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-0.5 rounded max-w-[220px]">
+              class="inline-flex items-center gap-1 text-[11px] bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-0.5 rounded max-w-[180px]">
               <span>${fileIcon(a.mime)}</span>
               <span class="truncate">${esc(a.name)}</span>
             </button>`).join('')}
         </div>` : ''}
-      </div>
-      ${owner ? `<span class="text-[10px] text-slate-400 shrink-0 mt-1.5">${esc(owner)}</span>` : ''}
-      <div class="flex items-center gap-0 shrink-0 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition mt-0.5">
-        <button data-action="move-master-up" data-id="${t.id}" ${isFirst ? 'disabled' : ''} class="text-slate-400 hover:text-slate-700 disabled:text-slate-200 disabled:hover:text-slate-200 px-1 py-0.5 text-xs leading-none" title="Move up">↑</button>
-        <button data-action="move-master-down" data-id="${t.id}" ${isLast ? 'disabled' : ''} class="text-slate-400 hover:text-slate-700 disabled:text-slate-200 disabled:hover:text-slate-200 px-1 py-0.5 text-xs leading-none" title="Move down">↓</button>
-        <button data-action="edit-master-todo" data-id="${t.id}" class="text-slate-400 hover:text-slate-700 px-1 py-0.5 text-xs leading-none" title="Edit details / attach files">✎</button>
-        <button data-action="delete-master-todo" data-id="${t.id}" class="text-slate-400 hover:text-red-600 px-1 py-0.5 text-xs leading-none" title="Delete">×</button>
+        ${owner ? `<div class="text-[10px] text-slate-400 mt-1">${esc(owner)}</div>` : ''}
       </div>
     </div>`;
   };
@@ -713,7 +714,7 @@ function masterTodosHTML() {
         : `<div class="relative">
             ${visible.length > 1 ? `<div class="absolute left-[9px] top-4 bottom-4 w-0.5 bg-gradient-to-b from-slate-200 via-slate-200 to-slate-100"></div>` : ''}
             ${visible.map(b => `
-              <div class="relative pl-10 pb-6 last:pb-1">
+              <div class="relative pl-8 sm:pl-10 pb-6 last:pb-1">
                 <span class="absolute left-0 top-1 w-5 h-5 rounded-full ${b.dot} ring-4 ring-white shadow-sm flex items-center justify-center">
                   <span class="w-1.5 h-1.5 rounded-full bg-white"></span>
                 </span>
