@@ -86,6 +86,37 @@ create policy "team todos" on todos
 -- create policy "own todos" on todos
 --   for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
 
+-- Attachments: files attached to a task or lead. The actual blobs live in
+-- Supabase Storage bucket "attachments"; this table stores metadata.
+create table if not exists attachments (
+  id uuid primary key default gen_random_uuid(),
+  todo_id uuid references todos(id) on delete cascade,
+  lead_id uuid references leads(id) on delete cascade,
+  owner_id uuid references auth.users(id) on delete cascade not null,
+  name text not null,
+  path text not null,
+  mime text,
+  size bigint,
+  created_at timestamptz default now()
+);
+
+create index if not exists attachments_todo_idx on attachments(todo_id);
+create index if not exists attachments_lead_idx on attachments(lead_id);
+
+alter table attachments enable row level security;
+drop policy if exists "team attachments" on attachments;
+create policy "team attachments" on attachments
+  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+
+-- Storage bucket + policies (private bucket; signed URLs for downloads)
+insert into storage.buckets (id, name, public) values ('attachments', 'attachments', false)
+on conflict (id) do nothing;
+
+drop policy if exists "team attachments storage" on storage.objects;
+create policy "team attachments storage" on storage.objects
+  for all using (bucket_id = 'attachments' and auth.role() = 'authenticated')
+  with check (bucket_id = 'attachments' and auth.role() = 'authenticated');
+
 -- Profiles: a public-readable mirror of auth.users so the dashboard can show
 -- "by Adam" / "by Sarah" badges next to leads, activities and todos.
 create table if not exists profiles (
