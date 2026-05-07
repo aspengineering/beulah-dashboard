@@ -213,3 +213,42 @@ drop trigger if exists todo_push_trigger on todos;
 create trigger todo_push_trigger
   after insert or update on todos
   for each row execute function notify_todo_change();
+
+-- Trigger: lead created or moved to Signed
+create or replace function notify_lead_change() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare payload jsonb;
+begin
+  if (TG_OP = 'INSERT') then
+    payload := jsonb_build_object(
+      'event', 'lead_added',
+      'lead_id', NEW.id,
+      'body', NEW.name || coalesce(' — ' || NEW.company, ''),
+      'actor_id', NEW.owner_id
+    );
+  elsif (TG_OP = 'UPDATE' and OLD.stage <> 'Signed' and NEW.stage = 'Signed') then
+    payload := jsonb_build_object(
+      'event', 'lead_signed',
+      'lead_id', NEW.id,
+      'body', NEW.name || coalesce(' — ' || NEW.company, ''),
+      'actor_id', NEW.owner_id
+    );
+  else
+    return NEW;
+  end if;
+  perform net.http_post(
+    url := 'https://ajlmeavwyqksjvuutmnb.supabase.co/functions/v1/send-push',
+    body := payload,
+    headers := jsonb_build_object(
+      'Content-Type', 'application/json',
+      'X-Webhook-Secret', 'WEBHOOK_SECRET_PLACEHOLDER'
+    )
+  );
+  return NEW;
+end;
+$$;
+
+drop trigger if exists lead_push_trigger on leads;
+create trigger lead_push_trigger
+  after insert or update on leads
+  for each row execute function notify_lead_change();

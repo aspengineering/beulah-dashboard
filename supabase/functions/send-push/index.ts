@@ -60,6 +60,12 @@ Deno.serve(async (req) => {
   } else if (payload.event === "task_done") {
     title = `${actorName} ✓ ${payload.body}`;
     body = leadName ? `On ${leadName}` : "Master task completed";
+  } else if (payload.event === "lead_added") {
+    title = `${actorName} added a lead`;
+    body = payload.body;
+  } else if (payload.event === "lead_signed") {
+    title = `Deal closed: ${payload.body}`;
+    body = `${actorName} moved this lead to Signed`;
   } else {
     return new Response("ignored");
   }
