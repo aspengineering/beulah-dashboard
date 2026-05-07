@@ -190,12 +190,24 @@ async function init() {
     renderConfigError();
     return;
   }
+  document.body.addEventListener('click', onClick);
   const { data: { session } } = await sb.auth.getSession();
   state.user = session?.user || null;
   state.user ? await renderApp() : renderLogin();
-  sb.auth.onAuthStateChange(async (_e, sess) => {
+
+  // Only re-render when the signed-in user actually changes (sign-in / sign-out).
+  // Supabase fires this handler on every tab refocus (TOKEN_REFRESHED, INITIAL_SESSION),
+  // so without this guard we'd wipe the DOM and re-fetch every time you came back.
+  let lastUserId = state.user?.id || null;
+  sb.auth.onAuthStateChange((event, sess) => {
+    const newUserId = sess?.user?.id || null;
+    if (newUserId === lastUserId) {
+      if (sess) state.user = sess.user;
+      return;
+    }
+    lastUserId = newUserId;
     state.user = sess?.user || null;
-    state.user ? await renderApp() : renderLogin();
+    state.user ? renderApp() : renderLogin();
   });
 }
 
@@ -284,8 +296,7 @@ async function renderApp() {
       </footer>
     </div>`;
 
-  // Global event delegation
-  document.body.addEventListener('click', onClick);
+  // Form-specific listener (re-bound per render since the form is replaced)
   $('#log-form').addEventListener('submit', onLogSubmit);
   $('#log-when').value = nowLocal();
 
