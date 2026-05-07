@@ -1361,37 +1361,9 @@ async function saveMasterEdit(form) {
 async function toggleMasterTodo(id, done) {
   const t = state.masterTodos.find(x => x.id === id);
   if (!t) return;
-  const EXCLUDE = new Set(['sípos lóránt', 'vidák lászló']);
-  const targets = done
-    ? state.leads.filter(l => l.stage !== 'Signed' && !EXCLUDE.has((l.name || '').toLowerCase()))
-    : [];
-
   t.done = done;
   const { error } = await sb.from('todos').update({ done }).eq('id', id);
   if (error) return toast(error.message, true);
-
-  if (done && targets.length > 0) {
-    const kind = inferKind(t.body);
-    const stamp = new Date().toISOString();
-    const rows = targets.map(l => ({
-      lead_id: l.id,
-      owner_id: state.user.id,
-      kind,
-      body: t.body,
-      event_at: stamp,
-    }));
-    const { data, error: e2 } = await sb.from('activity_log').insert(rows).select();
-    if (e2) toast('Master logged but per-lead entries failed: ' + e2.message, true);
-    else {
-      state.allActivity.unshift(...(data || []));
-      // bump leads' updated_at locally so sort is fresh
-      targets.forEach(l => { l.updated_at = stamp; });
-      computeLastEventCache();
-      // persist updated_at bump
-      await sb.from('leads').update({ updated_at: stamp }).in('id', targets.map(l => l.id));
-      toast(`Logged on ${targets.length} active leads`);
-    }
-  }
   renderOverview();
 }
 
