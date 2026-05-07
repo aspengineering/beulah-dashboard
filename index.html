@@ -1359,15 +1359,6 @@ async function toggleMasterTodo(id, done) {
     ? state.leads.filter(l => l.stage !== 'Signed' && !EXCLUDE.has((l.name || '').toLowerCase()))
     : [];
 
-  if (done && targets.length > 0) {
-    const ok = confirm(`Mark "${t.body}" as done and log it as a touchpoint on all ${targets.length} active leads?`);
-    if (!ok) {
-      // revert checkbox UI
-      renderOverview();
-      return;
-    }
-  }
-
   t.done = done;
   const { error } = await sb.from('todos').update({ done }).eq('id', id);
   if (error) return toast(error.message, true);
