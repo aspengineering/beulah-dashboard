@@ -4,6 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Beulah Dashboard</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f172a'/%3E%3Cpath d='M9 9h7c2.5 0 4.5 1.6 4.5 3.8 0 1.5-.9 2.7-2.3 3.3 1.8.5 3.1 1.9 3.1 3.7 0 2.4-2.2 4.2-5 4.2H9V9zm3 5.6h3.5c1.1 0 1.9-.7 1.9-1.6 0-.9-.8-1.6-1.9-1.6H12v3.2zm0 6.2h4c1.3 0 2.2-.8 2.2-1.8s-.9-1.8-2.2-1.8h-4v3.6z' fill='%2310b981'/%3E%3C/svg%3E" />
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
@@ -49,7 +50,8 @@ const state = {
   allTodos: [],
   masterTodos: [],
   contactMap: {},
-  profiles: {}
+  profiles: {},
+  editingMasterId: null
 };
 
 // ─── Utilities ───────────────────────────────────────────────────────────
@@ -68,6 +70,17 @@ function nowLocal() {
   const d = new Date();
   d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
   return d.toISOString().slice(0, 16);
+}
+function bucketOf(t) {
+  if (!t.due_at) return 'later';
+  const due = new Date(t.due_at); due.setHours(0,0,0,0);
+  const today = new Date(); today.setHours(0,0,0,0);
+  const days = Math.round((due - today) / 86400000);
+  if (days < 0) return 'overdue';
+  if (days === 0) return 'today';
+  if (days === 1) return 'tomorrow';
+  if (days <= 7) return 'week';
+  return 'later';
 }
 function fmtDue(iso) {
   if (!iso) return null;
@@ -522,35 +535,101 @@ function masterTodosHTML() {
   const open = (state.masterTodos || []).filter(t => !t.done);
   const done = (state.masterTodos || []).filter(t => t.done);
   const overdueCount = open.filter(t => fmtDue(t.due_at)?.overdue).length;
-  const row = (t) => {
+
+  const groups = { overdue: [], today: [], tomorrow: [], week: [], later: [] };
+  for (const t of open) groups[bucketOf(t)].push(t);
+  Object.values(groups).forEach(arr => arr.sort(masterSortFn));
+
+  const buckets = [
+    { key: 'overdue',  label: 'Overdue',   dot: 'bg-red-500',     accent: 'text-red-600',     numbered: false },
+    { key: 'today',    label: 'Today',     dot: 'bg-amber-500',   accent: 'text-amber-700',   numbered: true  },
+    { key: 'tomorrow', label: 'Tomorrow',  dot: 'bg-emerald-500', accent: 'text-emerald-700', numbered: false },
+    { key: 'week',     label: 'This week', dot: 'bg-slate-400',   accent: 'text-slate-600',   numbered: false },
+    { key: 'later',    label: 'Later',     dot: 'bg-slate-300',   accent: 'text-slate-500',   numbered: false },
+  ];
+
+  const taskRow = (t, idx, numbered, isFirst, isLast) => {
+    if (state.editingMasterId === t.id) {
+      const dueVal = t.due_at ? new Date(t.due_at).toISOString().slice(0, 10) : '';
+      return `
+      <form data-form-action="save-master-edit" data-id="${t.id}" class="flex gap-2 py-2 flex-wrap sm:flex-nowrap items-center">
+        <input name="body" value="${esc(t.body)}" required autofocus
+          class="flex-1 min-w-0 px-2 py-1.5 text-sm border border-slate-400 rounded-md focus:outline-none focus:ring-1 focus:ring-slate-900" />
+        <input name="due" type="date" value="${dueVal}"
+          class="px-2 py-1.5 text-sm border border-slate-300 rounded-md" />
+        <button type="submit" class="px-3 py-1.5 bg-slate-900 text-white text-sm rounded-md hover:bg-slate-800">Save</button>
+        <button type="button" data-action="cancel-master-edit" class="text-xs text-slate-500 hover:text-slate-700 px-2">Cancel</button>
+      </form>`;
+    }
     const due = fmtDue(t.due_at);
-    const overdue = !t.done && due?.overdue;
+    const owner = actorName(t.owner_id);
+    const overdueLabel = due?.overdue ? `<span class="text-xs font-bold text-red-600 ml-1.5 whitespace-nowrap">${esc(due.text)}</span>` : '';
     return `
-    <label class="flex items-start gap-2 py-2 group cursor-pointer ${overdue ? 'bg-red-50 -mx-2 px-2 rounded-md border-l-4 border-red-500' : ''}">
-      <input type="checkbox" data-action="toggle-master-todo" data-id="${t.id}" ${t.done ? 'checked' : ''}
-        class="mt-0.5 w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
-      <span class="flex-1 text-sm font-medium ${t.done ? 'line-through text-slate-400' : 'text-slate-900'} break-words">
-        ${esc(t.body)}${dueBadgeHTML(t, overdue)}${byBadge(t.owner_id)}
+    <div class="flex items-start gap-3 py-1.5 group">
+      <input type="checkbox" data-action="toggle-master-todo" data-id="${t.id}"
+        class="mt-1 w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 shrink-0 cursor-pointer" />
+      ${numbered ? `<span class="text-xs font-bold text-slate-300 mt-1 shrink-0 w-4 text-right tabular-nums">${idx+1}</span>` : ''}
+      <span class="flex-1 text-sm text-slate-900 break-words leading-snug pt-0.5">
+        ${esc(t.body)}${overdueLabel}
       </span>
-      <button data-action="delete-master-todo" data-id="${t.id}" class="text-slate-300 hover:text-red-600 text-xs opacity-0 group-hover:opacity-100">×</button>
-    </label>`;
+      ${owner ? `<span class="text-[10px] text-slate-400 shrink-0 mt-1.5">${esc(owner)}</span>` : ''}
+      <div class="flex items-center gap-0 shrink-0 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition">
+        <button data-action="move-master-up" data-id="${t.id}" ${isFirst ? 'disabled' : ''} class="text-slate-400 hover:text-slate-700 disabled:text-slate-200 disabled:hover:text-slate-200 px-1 py-0.5 text-xs leading-none" title="Move up">↑</button>
+        <button data-action="move-master-down" data-id="${t.id}" ${isLast ? 'disabled' : ''} class="text-slate-400 hover:text-slate-700 disabled:text-slate-200 disabled:hover:text-slate-200 px-1 py-0.5 text-xs leading-none" title="Move down">↓</button>
+        <button data-action="edit-master-todo" data-id="${t.id}" class="text-slate-400 hover:text-slate-700 px-1 py-0.5 text-xs leading-none" title="Edit">✎</button>
+        <button data-action="delete-master-todo" data-id="${t.id}" class="text-slate-400 hover:text-red-600 px-1 py-0.5 text-xs leading-none" title="Delete">×</button>
+      </div>
+    </div>`;
   };
+
+  const visible = buckets.filter(b => groups[b.key].length > 0);
+
   return `
     <section class="bg-white rounded-xl border border-slate-200 p-4 sm:p-5 mb-5">
-      <div class="flex items-center justify-between mb-3 gap-3 flex-wrap">
-        <h3 class="text-base font-semibold text-slate-900">Master tasks</h3>
-        <span class="text-xs ${overdueCount > 0 ? 'text-red-600 font-bold' : 'text-slate-500'}">${overdueCount > 0 ? overdueCount + ' overdue · ' : ''}${open.length} open${done.length ? ` · ${done.length} done` : ''}</span>
+      <div class="flex items-center justify-between mb-4 gap-3 flex-wrap">
+        <div>
+          <h3 class="text-base font-semibold text-slate-900">Master plan</h3>
+          <p class="text-xs text-slate-400 mt-0.5">Where to focus, in order</p>
+        </div>
+        <span class="text-xs font-medium text-slate-500">
+          ${overdueCount > 0 ? `<span class="text-red-600 font-bold">${overdueCount} overdue</span> · ` : ''}${open.length} open${done.length ? ` · ${done.length} done` : ''}
+        </span>
       </div>
-      <form id="master-todo-form" class="flex gap-2 mb-3 flex-wrap sm:flex-nowrap">
-        <input id="master-todo-input" type="text" placeholder="e.g. Call each lead — follow-up call (not email)"
-          class="flex-1 min-w-0 px-3 py-2 text-sm border border-slate-300 rounded-md focus:outline-none focus:ring-1 focus:ring-slate-900" />
+
+      ${open.length === 0
+        ? `<div class="text-sm text-slate-400 py-3">Plan is clear. Add the next leg below.</div>`
+        : `<div class="relative">
+            ${visible.length > 1 ? `<div class="absolute left-[7px] top-3 bottom-3 w-px bg-slate-200"></div>` : ''}
+            ${visible.map(b => `
+              <div class="relative pl-7 pb-4 last:pb-1">
+                <span class="absolute left-0 top-1.5 w-3.5 h-3.5 rounded-full ${b.dot} ring-4 ring-white"></span>
+                <div class="text-[11px] uppercase tracking-wider font-bold ${b.accent} mb-1">${b.label} · ${groups[b.key].length}</div>
+                <div>${groups[b.key].map((t, i, arr) => taskRow(t, i, b.numbered, i === 0, i === arr.length - 1)).join('')}</div>
+              </div>`).join('')}
+          </div>`}
+
+      <form id="master-todo-form" class="flex gap-2 mt-3 pt-3 border-t border-slate-100 flex-wrap sm:flex-nowrap">
+        <input id="master-todo-input" type="text" placeholder="Add to plan…"
+          class="flex-1 min-w-0 px-3 py-1.5 text-sm border border-slate-200 rounded-md focus:outline-none focus:ring-1 focus:ring-slate-400 placeholder-slate-400" />
         <input id="master-todo-due" type="date" title="Due date (optional)"
-          class="px-2 py-2 text-sm border border-slate-300 rounded-md focus:outline-none focus:ring-1 focus:ring-slate-900" />
-        <button type="submit" class="px-4 py-2 bg-slate-900 text-white text-sm font-medium rounded-md hover:bg-slate-800 shrink-0">Add</button>
+          class="px-2 py-1.5 text-sm border border-slate-200 rounded-md focus:outline-none focus:ring-1 focus:ring-slate-400" />
+        <button type="submit" class="px-3 py-1.5 bg-slate-900 text-white text-sm rounded-md hover:bg-slate-800 shrink-0">Add</button>
       </form>
-      ${state.masterTodos.length === 0
-        ? `<div class="text-xs text-slate-400 py-2">No master tasks yet.</div>`
-        : open.map(row).join('') + (done.length ? `<div class="text-[10px] uppercase tracking-wide text-slate-400 mt-3 mb-1">Done · ${done.length}</div>` + done.map(row).join('') : '')}
+
+      ${done.length ? `
+        <details class="mt-3">
+          <summary class="text-[11px] uppercase tracking-wider text-slate-400 cursor-pointer hover:text-slate-600 select-none">Completed · ${done.length}</summary>
+          <div class="mt-2 space-y-0.5">
+            ${done.map(t => `
+              <label class="flex items-center gap-2 py-1 group cursor-pointer">
+                <input type="checkbox" checked data-action="toggle-master-todo" data-id="${t.id}"
+                  class="w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
+                <span class="flex-1 text-sm line-through text-slate-400 break-words">${esc(t.body)}</span>
+                ${actorName(t.owner_id) ? `<span class="text-[10px] text-slate-400">${esc(actorName(t.owner_id))}</span>` : ''}
+                <button data-action="delete-master-todo" data-id="${t.id}" class="text-slate-300 hover:text-red-600 text-xs opacity-0 group-hover:opacity-100">×</button>
+              </label>`).join('')}
+          </div>
+        </details>` : ''}
     </section>`;
 }
 
@@ -872,6 +951,10 @@ async function onClick(e) {
     case 'delete-activity': return deleteActivity(id);
     case 'mic-toggle': return toggleDictation();
     case 'toggle-sidebar': return toggleSidebar();
+    case 'move-master-up': return moveMasterTodo(id, 'up');
+    case 'move-master-down': return moveMasterTodo(id, 'down');
+    case 'edit-master-todo': return beginMasterEdit(id);
+    case 'cancel-master-edit': state.editingMasterId = null; renderOverview(); return;
   }
 }
 
@@ -897,13 +980,63 @@ async function addMasterTodo(e) {
   const body = input.value.trim();
   if (!body) return;
   const due_at = dueInput?.value ? new Date(dueInput.value + 'T17:00').toISOString() : null;
+  const position = Math.floor(Date.now() / 1000);
   const { data, error } = await sb.from('todos')
-    .insert({ lead_id: null, owner_id: state.user.id, body, due_at })
+    .insert({ lead_id: null, owner_id: state.user.id, body, due_at, position })
     .select().single();
   if (error) return toast(error.message, true);
   state.masterTodos.push(data);
   input.value = '';
   if (dueInput) dueInput.value = '';
+  renderOverview();
+}
+
+const masterSortFn = (a, b) => {
+  const pa = a.position ?? 0;
+  const pb = b.position ?? 0;
+  if (pa !== pb) return pa - pb;
+  const da = a.due_at ? new Date(a.due_at).getTime() : Infinity;
+  const db = b.due_at ? new Date(b.due_at).getTime() : Infinity;
+  if (da !== db) return da - db;
+  return new Date(a.created_at) - new Date(b.created_at);
+};
+
+async function moveMasterTodo(id, dir) {
+  const t = state.masterTodos.find(x => x.id === id);
+  if (!t) return;
+  const bucket = bucketOf(t);
+  const peers = state.masterTodos
+    .filter(x => !x.done && bucketOf(x) === bucket)
+    .sort(masterSortFn);
+  const i = peers.findIndex(x => x.id === id);
+  const j = i + (dir === 'up' ? -1 : 1);
+  if (j < 0 || j >= peers.length) return;
+  [peers[i], peers[j]] = [peers[j], peers[i]];
+  const baseline = Math.floor(Date.now() / 1000);
+  const updates = peers.map((x, idx) => {
+    x.position = baseline + idx;
+    return sb.from('todos').update({ position: x.position }).eq('id', x.id);
+  });
+  await Promise.all(updates);
+  renderOverview();
+}
+
+function beginMasterEdit(id) {
+  state.editingMasterId = id;
+  renderOverview();
+}
+
+async function saveMasterEdit(form) {
+  const id = form.dataset.id;
+  const body = form.body.value.trim();
+  const dueRaw = form.due.value;
+  const due_at = dueRaw ? new Date(dueRaw + 'T17:00').toISOString() : null;
+  if (!body) return;
+  const t = state.masterTodos.find(x => x.id === id);
+  if (t) { t.body = body; t.due_at = due_at; }
+  state.editingMasterId = null;
+  const { error } = await sb.from('todos').update({ body, due_at }).eq('id', id);
+  if (error) toast(error.message, true);
   renderOverview();
 }
 
@@ -994,23 +1127,31 @@ async function toggleTodoOverview(id, done) {
 }
 
 async function logTodoCompletion(todo) {
+  return logSystemEvent(todo.lead_id, 'Done: ' + todo.body);
+}
+
+// Auto-log system events (lead created, stage moved, task added/done) into the
+// activity_log so the timeline + sparkline show every meaningful action.
+async function logSystemEvent(leadId, body) {
+  if (!leadId) return;
   const row = {
-    lead_id: todo.lead_id,
+    lead_id: leadId,
     owner_id: state.user.id,
     kind: 'note',
-    body: 'Done: ' + todo.body,
+    body,
     event_at: new Date().toISOString(),
   };
   const { data, error } = await sb.from('activity_log').insert(row).select().single();
   if (error) { toast(error.message, true); return; }
   state.allActivity.unshift(data);
-  if (state.selectedId === todo.lead_id) state.activity.unshift(data);
+  if (state.selectedId === leadId) state.activity.unshift(data);
   computeLastEventCache();
 }
 
 document.body.addEventListener('submit', (e) => {
   if (e.target.id === 'header-form') { e.preventDefault(); saveHeader(e); }
   if (e.target.id === 'master-todo-form') { addMasterTodo(e); }
+  if (e.target.dataset.formAction === 'save-master-edit') { e.preventDefault(); saveMasterEdit(e.target); }
 });
 
 async function addLead() {
@@ -1022,6 +1163,7 @@ async function addLead() {
     .select().single();
   if (error) return toast(error.message, true);
   state.leads.unshift(data);
+  await logSystemEvent(data.id, 'Lead created' + (company ? ' — ' + company.trim() : ''));
   await selectLead(data.id);
 }
 
@@ -1036,12 +1178,15 @@ async function selectLead(id) {
 
 async function setStage(stage) {
   const id = state.selectedId;
+  const lead = state.leads.find(l => l.id === id);
+  const prev = lead?.stage;
+  if (prev === stage) return;
   const now = new Date().toISOString();
   const { error } = await sb.from('leads').update({ stage, updated_at: now }).eq('id', id);
   if (error) return toast(error.message, true);
-  const lead = state.leads.find(l => l.id === id);
   if (lead) { lead.stage = stage; lead.updated_at = now; }
   state.leads.sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+  await logSystemEvent(id, `Stage ${prev || '?'} → ${stage}`);
   renderSidebar();
   renderMain();
   toast(`Moved to ${stage}`);
@@ -1163,6 +1308,8 @@ async function onTodoSubmit(e) {
   input.value = '';
   if (dueInput) dueInput.value = '';
   $('#todo-list').innerHTML = todosHTML();
+  await logSystemEvent(state.selectedId, 'Task added: ' + body);
+  if ($('#activity-list')) $('#activity-list').innerHTML = activityHTML();
 }
 
 async function toggleTodo(id, done) {

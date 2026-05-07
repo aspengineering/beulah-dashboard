@@ -51,6 +51,8 @@ create table if not exists todos (
 -- Idempotent for upgrades from earlier versions:
 alter table todos alter column lead_id drop not null;
 alter table todos add column if not exists due_at timestamptz;
+alter table todos add column if not exists position bigint default 0;
+update todos set position = extract(epoch from created_at)::bigint where position = 0;
 
 create index if not exists todos_lead_idx on todos(lead_id, done, created_at);
 
